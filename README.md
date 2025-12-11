@@ -1,3 +1,5 @@
+> ⚠️ **Ce programme fonctionne sur `Linux` uniquement.**
+
 ## Compilation du code
 ```bash
 # Pour tout compiler
