@@ -291,10 +291,10 @@ int main() {
 
     // 3. CHARGEMENT DES ASSETS
     // Assurez-vous que ces fichiers sont dans le même dossier !
-    tTable = LoadTexture("./assets/table.png");
-    tWheelStatic = LoadTexture("./assets/cadre.png");
-    tWheelSpin = LoadTexture("./assets/roue.png");
-    tChip = LoadTexture("./assets/jeton.png");
+    tTable = LoadTexture("./src/assets/table.png");
+    tWheelStatic = LoadTexture("./src/assets/cadre.png");
+    tWheelSpin = LoadTexture("./src/assets/roue.png");
+    tChip = LoadTexture("./src/assets/jeton.png");
     
     // Filtrage bilinéaire pour que le redimensionnement soit joli
     SetTextureFilter(tTable, TEXTURE_FILTER_BILINEAR);
