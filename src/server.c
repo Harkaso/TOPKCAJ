@@ -74,6 +74,7 @@ int main() {
     shm->bank = START_BANK;
 
     printf("[Croupier] Casino Ouvert. Attente des joueurs...\n");
+    sleep(2);
 
     while (1) {
         // --- PHASE 1: MISES OUVERTES ---
