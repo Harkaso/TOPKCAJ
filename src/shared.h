@@ -16,10 +16,10 @@
 #define DEFAULT_BOTS 8
 #define MIN_BOTS 4
 #define MAX_BOTS 20
+#define MAX_PLAYERS MAX_BOTS
 #define START_BANK 2000
 #define BET_PRICE 20
 #define MAX_BETS 50
-
 
 enum GameState { BETS_OPEN = 0, BETS_CLOSED = 1, RESULTS = 2 };
 
@@ -42,12 +42,36 @@ typedef struct {
 } Bet;
 
 typedef struct {
+    pid_t pid;
+    int alive;       // 0 = not registered / dead, 1 = alive
+    int color_id;    // color slot used by the bot
+    time_t last_seen; // last heartbeat timestamp
+} PlayerInfo;
+// mutex event history size
+#define MUTEX_EVENT_HISTORY 64
+
+typedef struct {
+    time_t ts;
+    pid_t pid;
+    int action; // 1 = locked, 0 = unlocked
+} MutexEvent;
+
+typedef struct {
     sem_t mutex;
     int state;
     int winning_number;
     Bet bets[MAX_BETS];
     int total_bets;
     int bank;
+    PlayerInfo players[MAX_PLAYERS];
+    int player_count;
+    /* Debug / status helpers updated by processes around semaphore operations */
+    int mutex_locked;    // 0 = unlocked, 1 = locked
+    pid_t mutex_owner;   // PID of process that holds the mutex (0 = none)
+    // History of mutex events (lock/unlock) - circular buffer
+    MutexEvent mutex_events[MUTEX_EVENT_HISTORY];
+    int mutex_events_head; // next write index
+    int mutex_events_count;
 } GameTable;
 
 #endif

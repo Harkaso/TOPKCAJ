@@ -7,8 +7,10 @@
 // Modifiez ces valeurs si les jetons ne tombent pas pile dans les cases !
 
 // Dimensions de la fenêtre (doit correspondre au ratio de votre image de table)
-const int SCREEN_W = 1600;
+// Keep total width under 1920 — we reserve a right-side panel for status
+const int SCREEN_W = 1900;
 const int SCREEN_H = 900;
+const int PANEL_W = 300;
 
 // POSITION DE LA GRILLE SUR L'IMAGE (En pixels)
 // Basé sur l'image fournie, on estime le coin haut-droite de la case "3" (première case rouge en haut)
@@ -194,7 +196,8 @@ void DrawAssets(float wheel_rotation, int win_num, int state) {
     // 1. DESSINER LA TABLE (FOND) - Inchangé
     DrawTexturePro(tTable, 
         (Rectangle){0, 0, tTable.width, tTable.height}, 
-        (Rectangle){0, 0, SCREEN_W, SCREEN_H}, 
+        // Reserve right panel for realtime status
+        (Rectangle){0, 0, SCREEN_W - PANEL_W, SCREEN_H}, 
         (Vector2){0,0}, 0.0f, WHITE);
 
     // 2. DESSINER LA ROUE - Inchangé
@@ -341,6 +344,92 @@ int main() {
         
         const char* textBank = TextFormat("BANQUE: %d $", shm->bank);
         DrawText(textBank, 20, 20, 40, GOLD);
+
+        // --- RIGHT STATUS PANEL ---
+        int panel_x = SCREEN_W - PANEL_W;
+        DrawRectangle(panel_x, 0, PANEL_W, SCREEN_H, (Color){20,20,20,220});
+        // Draw right-panel fields using a vertical cursor to avoid overlapping
+            time_t now = time(NULL);
+            int py = 12;
+            DrawText("STATUS PANEL", panel_x + 10, py, 20, RAYWHITE);
+            py += 28;
+
+            DrawText(TextFormat("Mutex locked: %s", shm->mutex_locked ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
+            py += 20;
+
+            DrawText(TextFormat("Mutex owner PID: %d", (int)shm->mutex_owner), panel_x + 10, py, 16, WHITE);
+            py += 20;
+
+            // Show owner's last_seen if available
+            if (shm->mutex_owner != 0) {
+                int owner_last = -1;
+                for (int i = 0; i < MAX_PLAYERS; i++) {
+                    if (shm->players[i].pid == shm->mutex_owner) {
+                        owner_last = (int)(now - shm->players[i].last_seen);
+                        break;
+                    }
+                }
+                if (owner_last >= 0) DrawText(TextFormat("Owner last_seen: %ds", owner_last), panel_x + 10, py, 14, WHITE);
+                else DrawText("Owner last_seen: ?", panel_x + 10, py, 14, WHITE);
+                py += 18;
+            }
+
+            DrawText(TextFormat("Total bets: %d", shm->total_bets), panel_x + 10, py, 14, WHITE);
+            py += 18;
+
+            DrawText(TextFormat("Bank: %d$", shm->bank), panel_x + 10, py, 16, GOLD);
+            py += 22;
+
+            // Players status list - start below the fields
+            int yoff = py + 6;
+            if (yoff < 140) yoff = 140;
+            DrawText("Players:", panel_x + 10, yoff, 18, RAYWHITE);
+        yoff += 22;
+        for (int i = 0; i < MAX_PLAYERS && yoff < SCREEN_H - 20; i++) {
+            if (shm->players[i].pid == 0) continue;
+            int alive = shm->players[i].alive;
+            int pid = shm->players[i].pid;
+            int color = shm->players[i].color_id;
+            time_t last = shm->players[i].last_seen;
+            int ago = (int)(now - last);
+            const char *al = alive ? "ALIVE" : "DEAD";
+            DrawText(TextFormat("#%d PID:%d %s (%ds) C:%d", i+1, pid, al, ago, color+1), panel_x + 10, yoff, 16, alive ? GREEN : RED);
+            yoff += 20;
+        }
+
+        // --- MUTEX EVENT HISTORY (console) ---
+        int hist_height = 200;
+        int hist_y = SCREEN_H - hist_height - 10;
+        // draw game state just above history
+        const char *gstate = "?";
+        if (shm->state == BETS_OPEN) gstate = "BETS_OPEN";
+        else if (shm->state == BETS_CLOSED) gstate = "BETS_CLOSED";
+        else if (shm->state == RESULTS) gstate = "RESULTS";
+        DrawText(TextFormat("Game state: %s", gstate), panel_x + 10, hist_y - 18, 16, WHITE);
+
+        DrawRectangle(panel_x + 6, hist_y, PANEL_W - 12, hist_height, (Color){10,10,10,200});
+        DrawText("Mutex history:", panel_x + 10, hist_y + 6, 16, RAYWHITE);
+
+        int max_lines = (hist_height - 24) / 16; // approx lines that fit
+        int count = shm->mutex_events_count;
+        if (count > MUTEX_EVENT_HISTORY) count = MUTEX_EVENT_HISTORY;
+        if (count > max_lines) count = max_lines;
+
+        // draw newest at bottom -> walk backwards from head-1
+        int head = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+        int line = 0;
+        for (int i = 0; i < count; i++) {
+            int idx = head - 1 - i;
+            if (idx < 0) idx += MUTEX_EVENT_HISTORY;
+            time_t ts = shm->mutex_events[idx].ts;
+            pid_t pid = shm->mutex_events[idx].pid;
+            int action = shm->mutex_events[idx].action;
+            int ago = (int)(now - ts);
+            const char *act = action ? "LOCK" : "UNLK";
+            int y = hist_y + hist_height - 6 - (i * 16) - 14;
+            DrawText(TextFormat("%3ds %s PID:%d", ago, act, (int)pid), panel_x + 10, y, 14, LIGHTGRAY);
+            line++;
+        }
 
         EndDrawing();
     }

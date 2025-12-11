@@ -4,6 +4,9 @@
 #define OPEN_TIME 7
 #define CLOSE_TIME 3
 #define RESULT_TIME 10
+// Watchdog: if a process holds the mutex but its last_seen is older than this many seconds,
+// the server will try to clear the lock to avoid permanent deadlock.
+#define MUTEX_WATCHDOG_SECONDS 6
 int shmid;
 GameTable *shm;
 
@@ -73,10 +76,62 @@ int main() {
     shm->total_bets = 0;
     shm->bank = START_BANK;
 
+    // Initialize player registry
+    for (int i = 0; i < MAX_PLAYERS; i++) {
+        shm->players[i].pid = 0;
+        shm->players[i].alive = 0;
+        shm->players[i].color_id = 0;
+        shm->players[i].last_seen = 0;
+    }
+    shm->player_count = 0;
+    shm->mutex_locked = 0;
+    shm->mutex_owner = 0;
+    shm->mutex_events_head = 0;
+    shm->mutex_events_count = 0;
+
     printf("[Croupier] Casino Ouvert. Attente des joueurs...\n");
     sleep(2);
 
     while (1) {
+        // --- WATCHDOG: detect stale mutex owner and try to recover ---
+        if (shm->mutex_locked && shm->mutex_owner != 0) {
+            // find owner in players and check last_seen
+            time_t now = time(NULL);
+            int owner_idx = -1;
+            for (int i = 0; i < MAX_PLAYERS; i++) {
+                if (shm->players[i].pid == shm->mutex_owner) { owner_idx = i; break; }
+            }
+
+            int stale = 0;
+            if (owner_idx >= 0) {
+                if (now - shm->players[owner_idx].last_seen > MUTEX_WATCHDOG_SECONDS) stale = 1;
+            } else {
+                // owner not found in players list -> consider stale
+                stale = 1;
+            }
+
+            if (stale) {
+                int sval = 0;
+                sem_getvalue(&shm->mutex, &sval);
+                if (sval == 0) {
+                    // semaphore appears locked; try to post and clear flags
+                    printf("[Server-Watchdog] Detected stale mutex owner PID %d, releasing semaphore...\n", (int)shm->mutex_owner);
+                    sem_post(&shm->mutex); // try to release
+                } else {
+                    printf("[Server-Watchdog] Detected stale mutex owner PID %d but semaphore value=%d; clearing flags\n", (int)shm->mutex_owner, sval);
+                }
+                // record unlock event
+                int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+                shm->mutex_events[idx].ts = time(NULL);
+                shm->mutex_events[idx].pid = shm->mutex_owner;
+                shm->mutex_events[idx].action = 0;
+                shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+                if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+
+                shm->mutex_locked = 0;
+                shm->mutex_owner = 0;
+            }
+        }
         // --- PHASE 1: MISES OUVERTES ---
         printf("\n[Croupier] FAITES VOS JEUX\n");
         shm->state = BETS_OPEN;
@@ -85,7 +140,27 @@ int main() {
         // --- PHASE 2: RIEN NE VA PLUS ---
         printf("[Croupier] RIEN NE VA PLUS\n");
         sem_wait(&shm->mutex);
+        shm->mutex_locked = 1; shm->mutex_owner = getpid();
+        // record lock event
+        {
+            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            shm->mutex_events[idx].ts = time(NULL);
+            shm->mutex_events[idx].pid = shm->mutex_owner;
+            shm->mutex_events[idx].action = 1;
+            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+        }
         shm->state = BETS_CLOSED;
+        // record unlock event
+        {
+            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            shm->mutex_events[idx].ts = time(NULL);
+            shm->mutex_events[idx].pid = getpid();
+            shm->mutex_events[idx].action = 0;
+            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+        }
+        shm->mutex_locked = 0; shm->mutex_owner = 0;
         sem_post(&shm->mutex);        
         sleep(CLOSE_TIME);
 
@@ -113,6 +188,16 @@ int main() {
 
         // --- PHASE 4: PAIEMENT ---
         sem_wait(&shm->mutex);
+        shm->mutex_locked = 1; shm->mutex_owner = getpid();
+        // record lock event
+        {
+            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            shm->mutex_events[idx].ts = time(NULL);
+            shm->mutex_events[idx].pid = shm->mutex_owner;
+            shm->mutex_events[idx].action = 1;
+            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+        }
         
         int total_gains = 0;
         for (int i = 0; i < shm->total_bets; i++) {
@@ -163,6 +248,16 @@ int main() {
                 printf("]\n");
             }
         }
+        // record unlock event
+        {
+            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            shm->mutex_events[idx].ts = time(NULL);
+            shm->mutex_events[idx].pid = getpid();
+            shm->mutex_events[idx].action = 0;
+            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+        }
+        shm->mutex_locked = 0; shm->mutex_owner = 0;
         sem_post(&shm->mutex);
         if(total_gains == 0) printf("[Croupier] Aucun joueur ne gagne, la maison gagne tout.\n");
 
@@ -172,7 +267,27 @@ int main() {
 
         // --- RESET ---
         sem_wait(&shm->mutex);
+        shm->mutex_locked = 1; shm->mutex_owner = getpid();
+        // record lock event
+        {
+            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            shm->mutex_events[idx].ts = time(NULL);
+            shm->mutex_events[idx].pid = shm->mutex_owner;
+            shm->mutex_events[idx].action = 1;
+            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+        }
         shm->total_bets = 0;
+        // record unlock event
+        {
+            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            shm->mutex_events[idx].ts = time(NULL);
+            shm->mutex_events[idx].pid = getpid();
+            shm->mutex_events[idx].action = 0;
+            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
+            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
+        }
+        shm->mutex_locked = 0; shm->mutex_owner = 0;
         sem_post(&shm->mutex);
     }
     return 0;
