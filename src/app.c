@@ -284,52 +284,53 @@ void DrawChips(GameTable *shm) {
     }
 }
 
-int main() {
-    // 1. SHM pointer will be obtained when the game starts (server launched by GUI)
-    int shmid = -1;
-    GameTable *shm = NULL;
-    pid_t pid_server = 0;
-    pid_t pid_bots = 0;
+// 1. SHM pointer will be obtained when the game starts (server launched by GUI)
+int shmid = -1;
+GameTable *shm = NULL;
+pid_t pid_server = 0;
+pid_t pid_bots = 0;
 
-    // cleanup handler to stop server/players if started
-    void gui_cleanup_int(int sig) {
-        // Try graceful shutdown of child process groups, then force if necessary
-        if (pid_bots > 0) {
-            // Send SIGTERM to the players process group
-            kill(-pid_bots, SIGTERM);
-            // Wait up to 2 seconds for group to exit
-            for (int i = 0; i < 20; i++) {
-                if (kill(pid_bots, 0) == -1) break; // no such process
-                usleep(100000);
-            }
-            // If still alive, force kill the group
-            kill(-pid_bots, SIGKILL);
-            waitpid(pid_bots, NULL, 0);
-            pid_bots = 0;
+// cleanup handler to stop server/players if started
+void gui_cleanup_int(int sig) {
+    // Try graceful shutdown of child process groups, then force if necessary
+    if (pid_bots > 0) {
+        // Send SIGTERM to the players process group
+        kill(-pid_bots, SIGTERM);
+        // Wait up to 2 seconds for group to exit
+        for (int i = 0; i < 20; i++) {
+            if (kill(pid_bots, 0) == -1) break; // no such process
+            usleep(100000);
         }
-        if (pid_server > 0) {
-            // Ask server to exit gracefully
-            kill(-pid_server, SIGINT);
-            for (int i = 0; i < 20; i++) {
-                if (kill(pid_server, 0) == -1) break;
-                usleep(100000);
-            }
-            // Force kill if still present
-            kill(-pid_server, SIGKILL);
-            waitpid(pid_server, NULL, 0);
-            pid_server = 0;
-        }
-        if (shm != NULL) {
-            shmdt(shm);
-            shm = NULL;
-        }
-        CloseWindow();
-        // If called from a signal handler, exit immediately
-        _exit(0);
+        // If still status, force kill the group
+        kill(-pid_bots, SIGKILL);
+        waitpid(pid_bots, NULL, 0);
+        pid_bots = 0;
     }
+    if (pid_server > 0) {
+        // Ask server to exit gracefully
+        kill(-pid_server, SIGINT);
+        for (int i = 0; i < 20; i++) {
+            if (kill(pid_server, 0) == -1) break;
+            usleep(100000);
+        }
+        // Force kill if still present
+        kill(-pid_server, SIGKILL);
+        waitpid(pid_server, NULL, 0);
+        pid_server = 0;
+    }
+    if (shm != NULL) {
+        shmdt(shm);
+        shm = NULL;
+    }
+    CloseWindow();
+    // If called from a signal handler, exit immediately
+    _exit(0);
+}
 
-    // atexit-friendly wrapper
-    void gui_cleanup_atexit(void) { gui_cleanup_int(0); }
+// atexit-friendly wrapper
+void gui_cleanup_atexit(void) { gui_cleanup_int(0); }
+
+int main() {
 
     signal(SIGINT, gui_cleanup_int);
     signal(SIGTERM, gui_cleanup_int);
@@ -514,7 +515,7 @@ int main() {
                 DrawText("STATUS PANEL", panel_x + 10, py, 20, RAYWHITE);
                 py += 28;
 
-                DrawText(TextFormat("Mutex locked: %s", shm->mutex_locked ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
+                DrawText(TextFormat("Mutex locked: %s", shm->mutex_status ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
                 py += 20;
 
                 DrawText(TextFormat("Mutex owner PID: %d", (int)shm->mutex_owner), panel_x + 10, py, 16, WHITE);
@@ -523,7 +524,7 @@ int main() {
                 // Show owner's last_seen if available
                 if (shm->mutex_owner != 0) {
                     int owner_last = -1;
-                    for (int i = 0; i < MAX_PLAYERS; i++) {
+                    for (int i = 0; i < MAX_BOTS; i++) {
                         if (shm->players[i].pid == shm->mutex_owner) {
                             owner_last = (int)(now - shm->players[i].last_seen);
                             break;
@@ -545,15 +546,15 @@ int main() {
                 if (yoff < 140) yoff = 140;
                 DrawText("Players:", panel_x + 10, yoff, 18, RAYWHITE);
             yoff += 22;
-            for (int i = 0; i < MAX_PLAYERS && yoff < SCREEN_H - 20; i++) {
+            for (int i = 0; i < MAX_BOTS && yoff < SCREEN_H - 20; i++) {
                 if (shm->players[i].pid == 0) continue;
-                int alive = shm->players[i].alive;
+                int status = shm->players[i].status;
                 int pid = shm->players[i].pid;
                 int color = shm->players[i].color_id;
                 time_t last = shm->players[i].last_seen;
                 int ago = (int)(now - last);
-                const char *al = alive ? "ALIVE" : "DEAD";
-                DrawText(TextFormat("#%d PID:%d %s (%ds) C:%d", i+1, pid, al, ago, color+1), panel_x + 10, yoff, 16, alive ? GREEN : RED);
+                const char *al = status ? "status" : "DEAD";
+                DrawText(TextFormat("#%d PID:%d %s (%ds) C:%d", i+1, pid, al, ago, color+1), panel_x + 10, yoff, 16, status ? GREEN : RED);
                 yoff += 20;
             }
 
@@ -583,9 +584,9 @@ int main() {
                 if (idx < 0) idx += MUTEX_EVENT_HISTORY;
                 time_t ts = shm->mutex_events[idx].ts;
                 pid_t pid = shm->mutex_events[idx].pid;
-                int action = shm->mutex_events[idx].action;
+                int status = shm->mutex_events[idx].status;
                 int ago = (int)(now - ts);
-                const char *act = action ? "LOCK" : "UNLK";
+                const char *act = status ? "LOCK" : "UNLK";
                 int y = hist_y + hist_height - 6 - (i * 16) - 14;
                 DrawText(TextFormat("%3ds %s PID:%d", ago, act, (int)pid), panel_x + 10, y, 14, LIGHTGRAY);
                 line++;
