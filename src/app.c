@@ -1,5 +1,5 @@
-/* roulette.c */
-#include "casino.h"
+/* app.c */
+#include "shared.h"
 #include "raylib.h"
 #include <math.h>
 

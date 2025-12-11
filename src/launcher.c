@@ -1,5 +1,5 @@
 // launcher.c
-#include "casino.h"
+#include "shared.h"
 #include <sys/wait.h>
 #include <string.h>
 
@@ -52,19 +52,19 @@ int main(int argc, char *argv[]) {
     if ((pid_bots = fork()) == 0) {
         /*
         if (num_bots > 1) {
-            execl("./dependencies/player", "player", "--bots", num_bots, NULL);
+            execl("./dependencies/players", "players", "--bots", num_bots, NULL);
         } 
         else {
-            execl("./dependencies/player", "player", NULL);
+            execl("./dependencies/players", "players", NULL);
         }
         */
-        execl("./dependencies/player", "player", NULL);
+        execl("./dependencies/players", "players", NULL);
         perror("Erreur: lancement des joueurs impossible."); exit(2);
     }
 
     if ((pid_gui = fork()) == 0) {
         freopen("/dev/null", "w", stderr);
-        execl("./dependencies/roulette", "roulette", NULL);
+        execl("./dependencies/app", "app", NULL);
         perror("Erreur: lancement lancement de l'interface graphique impossible."); exit(3);
     }
 

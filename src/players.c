@@ -1,5 +1,5 @@
-// player.c
-#include "casino.h"
+// players.c
+#include "shared.h"
 #include <sys/wait.h>
 #include <string.h>
 

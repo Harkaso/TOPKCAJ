@@ -1,5 +1,5 @@
 // server.c
-#include "casino.h"
+#include "shared.h"
 
 #define OPEN_TIME 7
 #define CLOSE_TIME 3
