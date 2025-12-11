@@ -2,6 +2,7 @@
 #include "shared.h"
 #include "raylib.h"
 #include <math.h>
+#include <sys/wait.h>
 
 // --- CONFIGURATION DE CALIBRATION ---
 // Modifiez ces valeurs si les jetons ne tombent pas pile dans les cases !
@@ -71,6 +72,8 @@ Texture2D tTable;
 Texture2D tWheelStatic;
 Texture2D tWheelSpin;
 Texture2D tChip;
+Texture2D tMain;
+Texture2D tPanel;
 
 // --- FONCTIONS UTILITAIRES ---
 
@@ -282,10 +285,56 @@ void DrawChips(GameTable *shm) {
 }
 
 int main() {
-    // 1. CONNEXION MEMOIRE PARTAGEE
-    int shmid = shmget(SHM_KEY, sizeof(GameTable), 0666);
-    if (shmid < 0) { printf("ERREUR: Lancez ./server d'abord !\n"); return 1; }
-    GameTable *shm = (GameTable *)shmat(shmid, NULL, 0);
+    // 1. SHM pointer will be obtained when the game starts (server launched by GUI)
+    int shmid = -1;
+    GameTable *shm = NULL;
+    pid_t pid_server = 0;
+    pid_t pid_bots = 0;
+
+    // cleanup handler to stop server/players if started
+    void gui_cleanup_int(int sig) {
+        // Try graceful shutdown of child process groups, then force if necessary
+        if (pid_bots > 0) {
+            // Send SIGTERM to the players process group
+            kill(-pid_bots, SIGTERM);
+            // Wait up to 2 seconds for group to exit
+            for (int i = 0; i < 20; i++) {
+                if (kill(pid_bots, 0) == -1) break; // no such process
+                usleep(100000);
+            }
+            // If still alive, force kill the group
+            kill(-pid_bots, SIGKILL);
+            waitpid(pid_bots, NULL, 0);
+            pid_bots = 0;
+        }
+        if (pid_server > 0) {
+            // Ask server to exit gracefully
+            kill(-pid_server, SIGINT);
+            for (int i = 0; i < 20; i++) {
+                if (kill(pid_server, 0) == -1) break;
+                usleep(100000);
+            }
+            // Force kill if still present
+            kill(-pid_server, SIGKILL);
+            waitpid(pid_server, NULL, 0);
+            pid_server = 0;
+        }
+        if (shm != NULL) {
+            shmdt(shm);
+            shm = NULL;
+        }
+        CloseWindow();
+        // If called from a signal handler, exit immediately
+        _exit(0);
+    }
+
+    // atexit-friendly wrapper
+    void gui_cleanup_atexit(void) { gui_cleanup_int(0); }
+
+    signal(SIGINT, gui_cleanup_int);
+    signal(SIGTERM, gui_cleanup_int);
+    signal(SIGHUP, gui_cleanup_int);
+    atexit(gui_cleanup_atexit);
 
     // 2. INIT FENETRE
     SetTraceLogLevel(LOG_NONE);
@@ -298,6 +347,8 @@ int main() {
     tWheelStatic = LoadTexture("./src/assets/cadre.png");
     tWheelSpin = LoadTexture("./src/assets/roue.png");
     tChip = LoadTexture("./src/assets/jeton.png");
+    // Main menu background (full window)
+    tMain = LoadTexture("./src/assets/Main.png");
     
     // Filtrage bilinéaire pour que le redimensionnement soit joli
     SetTextureFilter(tTable, TEXTURE_FILTER_BILINEAR);
@@ -305,133 +356,320 @@ int main() {
     SetTextureFilter(tWheelSpin, TEXTURE_FILTER_BILINEAR);
     SetTextureFilter(tChip, TEXTURE_FILTER_BILINEAR);
 
+    // --- AUDIO INITIALIZATION ---
+    InitAudioDevice();
+    bool audio_ready = IsAudioDeviceReady();
+    Music ambient = {0};
+    Sound s_win = {0};
+    Sound s_empty = {0};
+    bool ambient_playing = false;
+    if (audio_ready) {
+        ambient = LoadMusicStream("./src/assets/ambient.mp3");
+        s_win = LoadSound("./src/assets/win.mp3");
+        s_empty = LoadSound("./src/assets/empty.mp3");
+        PlayMusicStream(ambient);
+        ambient_playing = true;
+    }
+
     float rotation = 0.0f;
+    bool in_menu = true;
+    int prev_state = -1;
+    int prev_bank = -1;
+    bool show_lost_panel = false;
+    tPanel = LoadTexture("./src/assets/panel_clean_640x240.png");
+    SetTextureFilter(tPanel, TEXTURE_FILTER_BILINEAR);
 
     while (!WindowShouldClose()) {
-        // Animation rotation
-        if (shm->state != RESULTS) {
-            rotation += 1.0f; // Vitesse normale
-        } else {
-            rotation += 0.3f; // Vitesse ralentie "idle" pendant les résultats
+        // Update animation rotation only when inside the game (not menu)
+        if (!in_menu) {
+            if (shm->state != RESULTS) {
+                rotation += 1.0f; // Vitesse normale
+            } else {
+                rotation += 0.3f; // Vitesse ralentie "idle" pendant les résultats
+            }
+            if(rotation > 360) rotation -= 360;
         }
-        if(rotation > 360) rotation -= 360;
+
+        // Initialize previous state/bank when shared memory is first attached
+        if (shm != NULL && prev_state == -1) {
+            prev_state = shm->state;
+            prev_bank = shm->bank;
+        }
 
         BeginDrawing();
         ClearBackground(BLACK); // Fond noir si l'image de table ne couvre pas tout
 
-        // A. Dessiner le Décor (Table + Roue)
-        DrawAssets(rotation, shm->winning_number, shm->state);
+        if (in_menu) {
+            // Draw main menu full-screen
+            DrawTexturePro(tMain,
+                (Rectangle){0, 0, tMain.width, tMain.height},
+                (Rectangle){0, 0, SCREEN_W, SCREEN_H},
+                (Vector2){0,0}, 0.0f, WHITE);
 
-        // B. Dessiner les Jetons
-        DrawChips(shm);
-
-        // C. Interface UI (Texte par dessus)
-        const char* status = "";
-        Color col = WHITE;
-        if(shm->state == BETS_OPEN) { status="FAITES VOS JEUX"; col=GREEN; }
-        else if(shm->state == BETS_CLOSED) { status="RIEN NE VA PLUS"; col=GOLD; }
-        else { if (shm->winning_number == 37) {
-                status = "RESULTAT: 00";
-            } else {
-                status = TextFormat("RESULTAT: %d", shm->winning_number);
+            // Invisible button area (1000,400) size 440x140
+            Vector2 mp = GetMousePosition();
+            Rectangle btn = {1000, 400, 440, 140};
+            bool hover = (mp.x >= btn.x && mp.x <= btn.x + btn.width && mp.y >= btn.y && mp.y <= btn.y + btn.height);
+            if (hover) {
+                // subtle hover outline to aid the user
+                DrawRectangleLinesEx(btn, 2, (Color){255,255,255,80});
             }
-            col = RED;
-        }
-
-        // Bandeau noir semi-transparent en bas pour le texte
-        DrawRectangle(0, SCREEN_H - 60, SCREEN_W, 60, (Color){0,0,0,200});
-        DrawText(status, 20, SCREEN_H - 45, 30, col);
-        
-        const char* textBank = TextFormat("BANQUE: %d $", shm->bank);
-        DrawText(textBank, 20, 20, 40, GOLD);
-
-        // --- RIGHT STATUS PANEL ---
-        int panel_x = SCREEN_W - PANEL_W;
-        DrawRectangle(panel_x, 0, PANEL_W, SCREEN_H, (Color){20,20,20,220});
-        // Draw right-panel fields using a vertical cursor to avoid overlapping
-            time_t now = time(NULL);
-            int py = 12;
-            DrawText("STATUS PANEL", panel_x + 10, py, 20, RAYWHITE);
-            py += 28;
-
-            DrawText(TextFormat("Mutex locked: %s", shm->mutex_locked ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
-            py += 20;
-
-            DrawText(TextFormat("Mutex owner PID: %d", (int)shm->mutex_owner), panel_x + 10, py, 16, WHITE);
-            py += 20;
-
-            // Show owner's last_seen if available
-            if (shm->mutex_owner != 0) {
-                int owner_last = -1;
-                for (int i = 0; i < MAX_PLAYERS; i++) {
-                    if (shm->players[i].pid == shm->mutex_owner) {
-                        owner_last = (int)(now - shm->players[i].last_seen);
-                        break;
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && hover) {
+                // Spawn server and players only after user explicitly starts the game
+                if (pid_server == 0) {
+                    pid_server = fork();
+                    if (pid_server == 0) {
+                        // child: create a new process group so we can kill the whole group later
+                        setpgid(0,0);
+                        // child: replace with server binary
+                        execl("./dependencies/server", "./dependencies/server", (char*)NULL);
+                        // if exec fails
+                        perror("execl server");
+                        _exit(127);
                     }
                 }
-                if (owner_last >= 0) DrawText(TextFormat("Owner last_seen: %ds", owner_last), panel_x + 10, py, 14, WHITE);
-                else DrawText("Owner last_seen: ?", panel_x + 10, py, 14, WHITE);
-                py += 18;
+                if (pid_bots == 0) {
+                    pid_bots = fork();
+                    if (pid_bots == 0) {
+                        // child: create a new process group so we can kill the whole group later
+                        setpgid(0,0);
+                        // child: replace with players binary
+                        execl("./dependencies/players", "./dependencies/players", (char*)NULL);
+                        perror("execl players");
+                        _exit(127);
+                    }
+                }
+
+                // Wait for shared memory segment to be created by the server
+                int tries = 0;
+                while (tries < 30) { // wait up to ~30 seconds
+                    shmid = shmget(SHM_KEY, sizeof(GameTable), 0666);
+                    if (shmid != -1) break;
+                    tries++;
+                    sleep(1);
+                }
+                if (shmid == -1) {
+                    // Failed to find SHM in time — kill children and remain in menu
+                    if (pid_bots > 0) { kill(pid_bots, SIGKILL); waitpid(pid_bots, NULL, 0); pid_bots = 0; }
+                    if (pid_server > 0) { kill(pid_server, SIGINT); waitpid(pid_server, NULL, 0); pid_server = 0; }
+                    // Inform via trace log and stay in menu
+                    TraceLog(LOG_WARNING, "Server did not create shared memory — aborting start");
+                } else {
+                    // Attach to shared memory and enter game
+                    shm = (GameTable*)shmat(shmid, NULL, 0);
+                    if (shm == (void*)-1) {
+                        shm = NULL;
+                        TraceLog(LOG_WARNING, "Failed to attach shared memory in GUI");
+                    } else {
+                        in_menu = false; // successfully attached, enter game
+                    }
+                }
+            }
+        } else {
+            // A. Dessiner le Décor (Table + Roue)
+            DrawAssets(rotation, shm->winning_number, shm->state);
+
+            // B. Dessiner les Jetons
+            DrawChips(shm);
+        }
+
+        // Debug key: press 'K' to force bank to 0 (show game over panel)
+        if (!in_menu && IsKeyPressed(KEY_K) && shm != NULL) {
+            if (sem_wait(&shm->mutex) == 0) {
+                shm->bank = 0;
+                shm->total_bets = 0;
+                sem_post(&shm->mutex);
+                TraceLog(LOG_INFO, "[GUI-DEBUG] bank set to 0 via KEY_K");
+            }
+        }
+
+        // Draw UI and status panel only when inside the game
+        if (!in_menu) {
+            // C. Interface UI (Texte par dessus)
+            const char* status = "";
+            Color col = WHITE;
+            if(shm->state == BETS_OPEN) { status="FAITES VOS JEUX"; col=GREEN; }
+            else if(shm->state == BETS_CLOSED) { status="RIEN NE VA PLUS"; col=GOLD; }
+            else { if (shm->winning_number == 37) {
+                    status = "RESULTAT: 00";
+                } else {
+                    status = TextFormat("RESULTAT: %d", shm->winning_number);
+                }
+                col = RED;
             }
 
-            DrawText(TextFormat("Total bets: %d", shm->total_bets), panel_x + 10, py, 14, WHITE);
-            py += 18;
+            // Bandeau noir semi-transparent en bas pour le texte
+            DrawRectangle(0, SCREEN_H - 60, SCREEN_W, 60, (Color){0,0,0,200});
+            DrawText(status, 20, SCREEN_H - 45, 30, col);
+            
+            const char* textBank = TextFormat("BANQUE: %d $", shm->bank);
+            DrawText(textBank, 20, 20, 40, GOLD);
 
-            DrawText(TextFormat("Bank: %d$", shm->bank), panel_x + 10, py, 16, GOLD);
-            py += 22;
+            // --- RIGHT STATUS PANEL ---
+            int panel_x = SCREEN_W - PANEL_W;
+            DrawRectangle(panel_x, 0, PANEL_W, SCREEN_H, (Color){20,20,20,220});
+            // Draw right-panel fields using a vertical cursor to avoid overlapping
+                time_t now = time(NULL);
+                int py = 12;
+                DrawText("STATUS PANEL", panel_x + 10, py, 20, RAYWHITE);
+                py += 28;
 
-            // Players status list - start below the fields
-            int yoff = py + 6;
-            if (yoff < 140) yoff = 140;
-            DrawText("Players:", panel_x + 10, yoff, 18, RAYWHITE);
-        yoff += 22;
-        for (int i = 0; i < MAX_PLAYERS && yoff < SCREEN_H - 20; i++) {
-            if (shm->players[i].pid == 0) continue;
-            int alive = shm->players[i].alive;
-            int pid = shm->players[i].pid;
-            int color = shm->players[i].color_id;
-            time_t last = shm->players[i].last_seen;
-            int ago = (int)(now - last);
-            const char *al = alive ? "ALIVE" : "DEAD";
-            DrawText(TextFormat("#%d PID:%d %s (%ds) C:%d", i+1, pid, al, ago, color+1), panel_x + 10, yoff, 16, alive ? GREEN : RED);
-            yoff += 20;
+                DrawText(TextFormat("Mutex locked: %s", shm->mutex_locked ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
+                py += 20;
+
+                DrawText(TextFormat("Mutex owner PID: %d", (int)shm->mutex_owner), panel_x + 10, py, 16, WHITE);
+                py += 20;
+
+                // Show owner's last_seen if available
+                if (shm->mutex_owner != 0) {
+                    int owner_last = -1;
+                    for (int i = 0; i < MAX_PLAYERS; i++) {
+                        if (shm->players[i].pid == shm->mutex_owner) {
+                            owner_last = (int)(now - shm->players[i].last_seen);
+                            break;
+                        }
+                    }
+                    if (owner_last >= 0) DrawText(TextFormat("Owner last_seen: %ds", owner_last), panel_x + 10, py, 14, WHITE);
+                    else DrawText("Owner last_seen: ?", panel_x + 10, py, 14, WHITE);
+                    py += 18;
+                }
+
+                DrawText(TextFormat("Total bets: %d", shm->total_bets), panel_x + 10, py, 14, WHITE);
+                py += 18;
+
+                DrawText(TextFormat("Bank: %d$", shm->bank), panel_x + 10, py, 16, GOLD);
+                py += 22;
+
+                // Players status list - start below the fields
+                int yoff = py + 6;
+                if (yoff < 140) yoff = 140;
+                DrawText("Players:", panel_x + 10, yoff, 18, RAYWHITE);
+            yoff += 22;
+            for (int i = 0; i < MAX_PLAYERS && yoff < SCREEN_H - 20; i++) {
+                if (shm->players[i].pid == 0) continue;
+                int alive = shm->players[i].alive;
+                int pid = shm->players[i].pid;
+                int color = shm->players[i].color_id;
+                time_t last = shm->players[i].last_seen;
+                int ago = (int)(now - last);
+                const char *al = alive ? "ALIVE" : "DEAD";
+                DrawText(TextFormat("#%d PID:%d %s (%ds) C:%d", i+1, pid, al, ago, color+1), panel_x + 10, yoff, 16, alive ? GREEN : RED);
+                yoff += 20;
+            }
+
+            // --- MUTEX EVENT HISTORY (console) ---
+            int hist_height = 200;
+            int hist_y = SCREEN_H - hist_height - 10;
+            // draw game state just above history
+            const char *gstate = "?";
+            if (shm->state == BETS_OPEN) gstate = "BETS_OPEN";
+            else if (shm->state == BETS_CLOSED) gstate = "BETS_CLOSED";
+            else if (shm->state == RESULTS) gstate = "RESULTS";
+            DrawText(TextFormat("Game state: %s", gstate), panel_x + 10, hist_y - 18, 16, WHITE);
+
+            DrawRectangle(panel_x + 6, hist_y, PANEL_W - 12, hist_height, (Color){10,10,10,200});
+            DrawText("Mutex history:", panel_x + 10, hist_y + 6, 16, RAYWHITE);
+
+            int max_lines = (hist_height - 24) / 16; // approx lines that fit
+            int count = shm->mutex_events_count;
+            if (count > MUTEX_EVENT_HISTORY) count = MUTEX_EVENT_HISTORY;
+            if (count > max_lines) count = max_lines;
+
+            // draw newest at bottom -> walk backwards from head-1
+            int head = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
+            int line = 0;
+            for (int i = 0; i < count; i++) {
+                int idx = head - 1 - i;
+                if (idx < 0) idx += MUTEX_EVENT_HISTORY;
+                time_t ts = shm->mutex_events[idx].ts;
+                pid_t pid = shm->mutex_events[idx].pid;
+                int action = shm->mutex_events[idx].action;
+                int ago = (int)(now - ts);
+                const char *act = action ? "LOCK" : "UNLK";
+                int y = hist_y + hist_height - 6 - (i * 16) - 14;
+                DrawText(TextFormat("%3ds %s PID:%d", ago, act, (int)pid), panel_x + 10, y, 14, LIGHTGRAY);
+                line++;
+            }
+            // If this round had no winners, show the 'PERDU' panel in the middle
+            if (shm->state == RESULTS && show_lost_panel) {
+                // Darken background
+                DrawRectangle(0, 0, SCREEN_W, SCREEN_H, (Color){0,0,0,160});
+                float px = (SCREEN_W / 2.0f) - (tPanel.width / 2.0f);
+                float py = (SCREEN_H / 2.0f) - (tPanel.height / 2.0f);
+                DrawTexturePro(tPanel,
+                    (Rectangle){0,0,tPanel.width, tPanel.height},
+                    (Rectangle){px, py, tPanel.width, tPanel.height},
+                    (Vector2){0,0}, 0.0f, WHITE);
+                // Overlay text "PERDU" and summary
+                DrawText("PERDU", (int)(px + tPanel.width/2 - MeasureText("PERDU", 48)/2), (int)(py + 30), 48, RED);
+                const char *summary = "La banque est vide. Vous avez perdu.";
+                DrawText(summary, (int)(px + tPanel.width/2 - MeasureText(summary, 18)/2), (int)(py + 100), 18, LIGHTGRAY);
+                DrawText(TextFormat("Banque: %d$", shm->bank), (int)(px + tPanel.width/2 - MeasureText("Banque: 0000$", 16)/2), (int)(py + 140), 16, GOLD);
+
+                // Rejouer button
+                int btn_w = 180; int btn_h = 42;
+                float bx = px + (tPanel.width/2) - (btn_w/2);
+                float by = py + tPanel.height - 70;
+                Rectangle rbtn = { bx, by, btn_w, btn_h };
+                Vector2 mp = GetMousePosition();
+                bool hoverbtn = (mp.x >= rbtn.x && mp.x <= rbtn.x + rbtn.width && mp.y >= rbtn.y && mp.y <= rbtn.y + rbtn.height);
+                DrawRectangleRec(rbtn, hoverbtn ? (Color){100,180,100,255} : (Color){80,160,80,255});
+                DrawRectangleLinesEx(rbtn, 2, BLACK);
+                DrawText("REJOUER", (int)(bx + btn_w/2 - MeasureText("REJOUER", 20)/2), (int)(by + btn_h/2 - 10), 20, BLACK);
+
+                if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && hoverbtn) {
+                    // Reset bank and bets under semaphore protection
+                    if (shm != NULL) {
+                        if (sem_wait(&shm->mutex) == 0) {
+                            shm->bank = START_BANK;
+                            shm->total_bets = 0;
+                            sem_post(&shm->mutex);
+                        }
+                    }
+                    show_lost_panel = false;
+                }
+            }
         }
 
-        // --- MUTEX EVENT HISTORY (console) ---
-        int hist_height = 200;
-        int hist_y = SCREEN_H - hist_height - 10;
-        // draw game state just above history
-        const char *gstate = "?";
-        if (shm->state == BETS_OPEN) gstate = "BETS_OPEN";
-        else if (shm->state == BETS_CLOSED) gstate = "BETS_CLOSED";
-        else if (shm->state == RESULTS) gstate = "RESULTS";
-        DrawText(TextFormat("Game state: %s", gstate), panel_x + 10, hist_y - 18, 16, WHITE);
-
-        DrawRectangle(panel_x + 6, hist_y, PANEL_W - 12, hist_height, (Color){10,10,10,200});
-        DrawText("Mutex history:", panel_x + 10, hist_y + 6, 16, RAYWHITE);
-
-        int max_lines = (hist_height - 24) / 16; // approx lines that fit
-        int count = shm->mutex_events_count;
-        if (count > MUTEX_EVENT_HISTORY) count = MUTEX_EVENT_HISTORY;
-        if (count > max_lines) count = max_lines;
-
-        // draw newest at bottom -> walk backwards from head-1
-        int head = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
-        int line = 0;
-        for (int i = 0; i < count; i++) {
-            int idx = head - 1 - i;
-            if (idx < 0) idx += MUTEX_EVENT_HISTORY;
-            time_t ts = shm->mutex_events[idx].ts;
-            pid_t pid = shm->mutex_events[idx].pid;
-            int action = shm->mutex_events[idx].action;
-            int ago = (int)(now - ts);
-            const char *act = action ? "LOCK" : "UNLK";
-            int y = hist_y + hist_height - 6 - (i * 16) - 14;
-            DrawText(TextFormat("%3ds %s PID:%d", ago, act, (int)pid), panel_x + 10, y, 14, LIGHTGRAY);
-            line++;
+        // If shared memory exists, detect transitions to RESULTS to play sounds
+        if (shm != NULL) {
+            if (shm->state != prev_state) {
+                if (shm->state == RESULTS) {
+                    // If bank increased compared to previous value => at least one player won
+                    if (prev_bank >= 0 && shm->bank > prev_bank) {
+                        if (audio_ready) PlaySound(s_win);
+                    }
+                    // leaving RESULTS doesn't clear the bank-based lost panel here
+                }
+                prev_state = shm->state;
+            }
+            // Bank dropped to zero -> play empty sound and show lost panel
+            if (prev_bank != -1 && shm->bank == 0 && prev_bank != 0) {
+                if (audio_ready) PlaySound(s_empty);
+            }
+            // show lost panel whenever bank is zero
+            show_lost_panel = (shm->bank == 0);
+            prev_bank = shm->bank;
         }
+
+        // Update music stream each frame when playing ambient
+        if (audio_ready && ambient_playing) UpdateMusicStream(ambient);
 
         EndDrawing();
+    }
+
+    // If server/players were started, terminate them (kill their process groups)
+    if (pid_bots > 0) {
+        // kill entire group
+        kill(-pid_bots, SIGKILL);
+        waitpid(pid_bots, NULL, 0);
+        pid_bots = 0;
+    }
+    if (pid_server > 0) {
+        // ask server to exit gracefully
+        kill(-pid_server, SIGINT);
+        waitpid(pid_server, NULL, 0);
+        pid_server = 0;
     }
 
     // Nettoyage
@@ -439,7 +677,10 @@ int main() {
     UnloadTexture(tWheelStatic);
     UnloadTexture(tWheelSpin);
     UnloadTexture(tChip);
-    shmdt(shm);
+    UnloadTexture(tMain);
+    if (shm != NULL) shmdt(shm);
+    // Unload panel texture if loaded
+    UnloadTexture(tPanel);
     CloseWindow();
     return 0;
 }

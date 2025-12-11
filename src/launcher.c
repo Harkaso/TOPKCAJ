@@ -44,28 +44,15 @@ int main(int argc, char *argv[]) {
     */
 
     if ((pid_server = fork()) == 0) {
-        execl("./dependencies/server", "server", NULL);
-        perror("Erreur: lancement du serveur impossible."); exit(1);
+        // Do not start server here. GUI will start server/players when user clicks "Play".
+        exit(0);
     }
     sleep(1); 
-
-    if ((pid_bots = fork()) == 0) {
-        /*
-        if (num_bots > 1) {
-            execl("./dependencies/players", "players", "--bots", num_bots, NULL);
-        } 
-        else {
-            execl("./dependencies/players", "players", NULL);
-        }
-        */
-        execl("./dependencies/players", "players", NULL);
-        perror("Erreur: lancement des joueurs impossible."); exit(2);
-    }
-
+    // Start only the GUI. The GUI will launch server and players when the user starts the game.
     if ((pid_gui = fork()) == 0) {
         freopen("/dev/null", "w", stderr);
         execl("./dependencies/app", "app", NULL);
-        perror("Erreur: lancement lancement de l'interface graphique impossible."); exit(3);
+        perror("Erreur: lancement de l'interface graphique impossible."); exit(3);
     }
 
     int status;
