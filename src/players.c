@@ -4,13 +4,15 @@
 #include <string.h>
 #include <signal.h>
 
+volatile sig_atomic_t running = 1;
+
 // helper to append mutex events into SHM circular buffer (caller should hold shm->mutex)
 static void push_mutex_event(GameTable *shm, pid_t pid, int action) {
     if (!shm) return;
     int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
     shm->mutex_events[idx].ts = time(NULL);
     shm->mutex_events[idx].pid = pid;
-    shm->mutex_events[idx].action = action;
+    shm->mutex_events[idx].status = action;
     shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
     if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
 }
@@ -177,78 +179,70 @@ void create_debug_bet(Bet *m) {
     }
 }
 
-void lancer_bot(int player_id) {
+// helper: register slot
+int register_player(GameTable *shm_local, int pid_color) {
+    int idx = -1;
+    sem_wait(&shm_local->mutex);
+    shm_local->mutex_status = 1; shm_local->mutex_owner = getpid();
+    push_mutex_event(shm_local, shm_local->mutex_owner, 1);
+    for (int i = 0; i < MAX_BOTS; i++) {
+        if (shm_local->players[i].status == 0) {
+            shm_local->players[i].pid = getpid();
+            shm_local->players[i].status = 1;
+            shm_local->players[i].color_id = pid_color;
+            shm_local->players[i].last_seen = time(NULL);
+            shm_local->player_count++;
+            idx = i;
+            break;
+        }
+    }
+    shm_local->mutex_status = 0; shm_local->mutex_owner = 0;
+    push_mutex_event(shm_local, getpid(), 0);
+    sem_post(&shm_local->mutex);
+    return idx;
+}
+
+void deregister_player(GameTable *shm_local, int slot) {
+    if (slot < 0) return;
+    sem_wait(&shm_local->mutex);
+    shm_local->mutex_status = 1; shm_local->mutex_owner = getpid();
+    push_mutex_event(shm_local, shm_local->mutex_owner, 1);
+    shm_local->players[slot].status = 0;
+    shm_local->players[slot].pid = 0;
+    shm_local->players[slot].color_id = 0;
+    shm_local->players[slot].last_seen = 0;
+    if (shm_local->player_count > 0) shm_local->player_count--;
+    shm_local->mutex_status = 0; shm_local->mutex_owner = 0;
+    push_mutex_event(shm_local, getpid(), 0);
+    sem_post(&shm_local->mutex);
+}
+
+void handle_sig(int sig) {
+    running = 0;
+}
+
+void launch_bot(int player_id) {
     srand(time(NULL) ^ (getpid()<<16));
     int shmid = shmget(SHM_KEY, sizeof(GameTable), 0666);
     if (shmid < 0) exit(1);
     GameTable *shm = (GameTable *)shmat(shmid, NULL, 0);
 
-    // register the player in the shared table
-    static GameTable *g_shm = NULL;
-    static int g_slot = -1;
-
-    // helper: register slot
-    int register_player(GameTable *shm_local, int pid_color) {
-        int idx = -1;
-        sem_wait(&shm_local->mutex);
-        shm_local->mutex_locked = 1; shm_local->mutex_owner = getpid();
-        push_mutex_event(shm_local, shm_local->mutex_owner, 1);
-        for (int i = 0; i < MAX_PLAYERS; i++) {
-            if (shm_local->players[i].alive == 0) {
-                shm_local->players[i].pid = getpid();
-                shm_local->players[i].alive = 1;
-                shm_local->players[i].color_id = pid_color;
-                shm_local->players[i].last_seen = time(NULL);
-                shm_local->player_count++;
-                idx = i;
-                break;
-            }
-        }
-        shm_local->mutex_locked = 0; shm_local->mutex_owner = 0;
-        push_mutex_event(shm_local, getpid(), 0);
-        sem_post(&shm_local->mutex);
-        return idx;
-    }
-
-    void deregister_player(GameTable *shm_local, int slot) {
-        if (slot < 0) return;
-        sem_wait(&shm_local->mutex);
-        shm_local->mutex_locked = 1; shm_local->mutex_owner = getpid();
-        push_mutex_event(shm_local, shm_local->mutex_owner, 1);
-        shm_local->players[slot].alive = 0;
-        shm_local->players[slot].pid = 0;
-        shm_local->players[slot].color_id = 0;
-        shm_local->players[slot].last_seen = 0;
-        if (shm_local->player_count > 0) shm_local->player_count--;
-        shm_local->mutex_locked = 0; shm_local->mutex_owner = 0;
-        push_mutex_event(shm_local, getpid(), 0);
-        sem_post(&shm_local->mutex);
-    }
-
-    // signal handler to try cleanup on graceful termination
-    void handle_term(int sig) {
-        if (g_shm != NULL && g_slot >= 0) {
-            deregister_player(g_shm, g_slot);
-        }
-        exit(0);
-    }
-
-    g_shm = shm;
-    signal(SIGTERM, handle_term);
-    signal(SIGINT, handle_term);
+    signal(SIGTERM, handle_sig);
+    signal(SIGINT, handle_sig);
 
     int bet_placed = 0;
     int reg_slot = register_player(shm, player_id);
-    g_slot = reg_slot;
 
-    while (1) {
+    // signal handler to try cleanup on graceful termination
+
+    while (running) {
         // heartbeat / update last_seen for GUI
         if (reg_slot >= 0) {
             sem_wait(&shm->mutex);
-            shm->mutex_locked = 1; shm->mutex_owner = getpid();
+            shm->mutex_status = 1; shm->mutex_owner = getpid();
             shm->players[reg_slot].last_seen = time(NULL);
             push_mutex_event(shm, getpid(), 1);
-            shm->mutex_locked = 0; shm->mutex_owner = 0;
+            shm->mutex_status = 0; shm->mutex_owner = 0;
             push_mutex_event(shm, getpid(), 0);
             sem_post(&shm->mutex);
         }
@@ -257,7 +251,7 @@ void lancer_bot(int player_id) {
             usleep((rand() % 4000) * 1000);
             
             sem_wait(&shm->mutex);
-            shm->mutex_locked = 1; shm->mutex_owner = getpid();
+            shm->mutex_status = 1; shm->mutex_owner = getpid();
             push_mutex_event(shm, shm->mutex_owner, 1);
 
             if (shm->total_bets < MAX_BETS && 
@@ -272,7 +266,7 @@ void lancer_bot(int player_id) {
                 bet_placed = 1;
             }
 
-            shm->mutex_locked = 0; shm->mutex_owner = 0;
+            shm->mutex_status = 0; shm->mutex_owner = 0;
             push_mutex_event(shm, getpid(), 0);
             sem_post(&shm->mutex);
             
@@ -287,6 +281,8 @@ void lancer_bot(int player_id) {
 
     // never reached normally, but be polite
     if (reg_slot >= 0) deregister_player(shm, reg_slot);
+    shmdt(shm);
+    exit(0); 
 }
 
 int main(int argc, char *argv[]) {
@@ -304,7 +300,7 @@ int main(int argc, char *argv[]) {
         if (fork() == 0) { 
             // On passe l'ID (i) pour la couleur
             // Si on a plus de 8 bots, on boucle les couleurs avec modulo % 8
-            lancer_bot(i % 16); 
+            launch_bot(i % 16); 
             exit(0); 
         }
     }

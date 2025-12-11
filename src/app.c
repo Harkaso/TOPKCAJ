@@ -1,4 +1,4 @@
-/* app.c */
+// app.c
 #include "shared.h"
 #include "raylib.h"
 #include <math.h>
@@ -354,7 +354,7 @@ int main() {
             DrawText("STATUS PANEL", panel_x + 10, py, 20, RAYWHITE);
             py += 28;
 
-            DrawText(TextFormat("Mutex locked: %s", shm->mutex_locked ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
+            DrawText(TextFormat("Mutex locked: %s", shm->mutex_status ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
             py += 20;
 
             DrawText(TextFormat("Mutex owner PID: %d", (int)shm->mutex_owner), panel_x + 10, py, 16, WHITE);
@@ -363,7 +363,7 @@ int main() {
             // Show owner's last_seen if available
             if (shm->mutex_owner != 0) {
                 int owner_last = -1;
-                for (int i = 0; i < MAX_PLAYERS; i++) {
+                for (int i = 0; i < MAX_BOTS; i++) {
                     if (shm->players[i].pid == shm->mutex_owner) {
                         owner_last = (int)(now - shm->players[i].last_seen);
                         break;
@@ -385,9 +385,9 @@ int main() {
             if (yoff < 140) yoff = 140;
             DrawText("Players:", panel_x + 10, yoff, 18, RAYWHITE);
         yoff += 22;
-        for (int i = 0; i < MAX_PLAYERS && yoff < SCREEN_H - 20; i++) {
+        for (int i = 0; i < MAX_BOTS && yoff < SCREEN_H - 20; i++) {
             if (shm->players[i].pid == 0) continue;
-            int alive = shm->players[i].alive;
+            int alive = shm->players[i].status;
             int pid = shm->players[i].pid;
             int color = shm->players[i].color_id;
             time_t last = shm->players[i].last_seen;
@@ -423,7 +423,7 @@ int main() {
             if (idx < 0) idx += MUTEX_EVENT_HISTORY;
             time_t ts = shm->mutex_events[idx].ts;
             pid_t pid = shm->mutex_events[idx].pid;
-            int action = shm->mutex_events[idx].action;
+            int action = shm->mutex_events[idx].status;
             int ago = (int)(now - ts);
             const char *act = action ? "LOCK" : "UNLK";
             int y = hist_y + hist_height - 6 - (i * 16) - 14;
