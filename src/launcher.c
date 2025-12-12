@@ -55,7 +55,10 @@ int main(int argc, char *argv[]) {
         // Parsing des arguments
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
-                strncpy(str_bots, argv[i+1], 9); i++;
+                strncpy(str_bots, argv[i+1], 9); 
+                if (atoi(str_bots) <= 0) printf("Erreur: l'option '--bots' dois recevoir un nombre strictement positif");
+                else if (atoi(str_bots) < 4 || atoi(str_bots) > 16) printf("Erruer: L'option '--bots' dois etre comprise entre 4 et 16");
+                i++;
             }
             else if (strcmp(argv[i], "--bank") == 0 && i+1 < argc) {
                 strncpy(str_bank, argv[i+1], 9); i++;
