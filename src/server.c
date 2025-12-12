@@ -57,7 +57,7 @@ void print_bet_desc(Bet m) {
 int main(int argc, char *argv[]) {
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
-    srand(time(NULL));
+    srand(time(NULL) ^ (getpid()<<16));
 
     int start_bank = DEFAULT_BANK;
     int bet_price = DEFAULT_BET_PRICE;

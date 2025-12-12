@@ -17,79 +17,85 @@ static void push_mutex_event(SharedResource *shm, pid_t pid, int status) {
     if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
 }
 
+/*
+score formula = 100 - (ABS(N-4) * 4) + (N * 3,5)
+
++-----------+-----+-------+---------+-------+
+| name      | num | score | perc (%)| seuil |
+|-----------|-----|-------|---------|-------|
+| carre     | 4   | 114.0 | 15.38 % | 1538  |
+| sixain    | 6   | 113.0 | 15.25 % | 3063  |
+| col/doz   | 12  | 110.0 | 14.84 % | 4548  |
+| simple    | 18  | 107.0 | 14.44 % | 5992  |
+| transver. | 3   | 106.5 | 14.37 % | 7429  |
+| cheval    | 2   | 99.0  | 13.36 % | 8760  |
+| plein     | 1   | 91.5  | 12.35 % | -     |
++-----------+-----+-------+---------+-------+
+*/
+
 void create_random_bet(Bet *m, int player_id, int bet_price) {
     m->pid = getpid();
     m->color_id = player_id;
     m->amount = bet_price;
     
-    int roll = rand() % 1000;
+    int roll = rand() % 10000;
 
-    // --- A. MISES EXTERIEURES (Rouge, Noir, etc.) ---
-    if (roll < 65) {
-        m->type = BET_RED + (rand() % 12); 
+    if (roll < 1538) {
+        m->type = BET_SQUARE; m->count = 4;
+        int base = 1 + rand() % 32;
+        if (base % 3 == 0) base--; 
+        m->numbers[0]=base;   m->numbers[1]=base+1;
+        m->numbers[2]=base+3; m->numbers[3]=base+4;
+    }
+
+    else if (roll < 3063) {
+        m->type = BET_DOUBLE_STREET; m->count = 6;
+        int row = ((rand() % 33) / 3) * 3 + 1;
+        if(row>31) row=31;
+        for(int k=0;k<6;k++) m->numbers[k]=row+k;
+    }
+
+    else if (roll < 4548) {
+        m->type = BET_DOZEN_1 + (rand() % 6);
         m->count = 0;
-    } 
-    // --- B. MISES INTERIEURES ---
-    else {
-        int sub_roll = rand() % 10; 
+    }
 
-        // ZONE 1 : GRILLE STANDARD 1-36 (90% du temps intérieur)
-        if (sub_roll < 9) {
-            int type_in = rand() % 5; // 0:Single, 1:Split, 2:Street, 3:Square, 4:Sixain
-            
-            if (type_in == 0) { // SINGLE
-                m->type = BET_SINGLE; m->count = 1;
-                m->numbers[0] = 1 + rand() % 36; 
-            } 
-            else if (type_in == 1) { // SPLIT STANDARD
-                m->type = BET_SPLIT; m->count = 2;
-                if (rand() % 2 == 0) { // Horizontal
-                    int base = 1 + rand() % 35;
-                    if (base % 3 == 0) base--; // Correction bord droit
-                    m->numbers[0] = base; m->numbers[1] = base + 1;
-                } else { // Vertical
-                    int base = 1 + rand() % 33;
-                    m->numbers[0] = base; m->numbers[1] = base + 3;
-                }
-            } 
-            else if (type_in == 2) { // STREET
-                int row = ((rand() % 36) / 3) * 3 + 1;
-                m->type = BET_STREET; m->count = 3;
-                for(int k=0;k<3;k++) m->numbers[k]=row+k;
-            } 
-            else if (type_in == 3) { // SQUARE
-                int base = 1 + rand() % 32;
+    else if (roll < 5992) {
+        m->type = BET_RED + (rand() % 6);
+        m->count = 0;
+    }
+
+    else if (roll < 7429) {
+        m->type = BET_STREET; m->count = 3;
+        int row = ((rand() % 36) / 3) * 3 + 1;
+        for(int k=0;k<3;k++) m->numbers[k]=row+k;
+    }
+
+    else if (roll < 8760) {
+        m->type = BET_SPLIT; m->count = 2;
+        // 5% de chance de tenter un Split spécial avec 0
+        if (rand() % 20 == 0) {
+             m->numbers[0]=0; m->numbers[1]=37; // 0-00
+        } else {
+            if (rand() % 2 == 0) { // Horizontal
+                int base = 1 + rand() % 35;
                 if (base % 3 == 0) base--; 
-                m->type = BET_SQUARE; m->count = 4;
-                m->numbers[0]=base; m->numbers[1]=base+1;
-                m->numbers[2]=base+3; m->numbers[3]=base+4;
-            } 
-            else { // SIXAIN
-                int row = ((rand() % 33) / 3) * 3 + 1;
-                if(row>31) row=31;
-                m->type = BET_DOUBLE_STREET; m->count = 6;
-                for(int k=0;k<6;k++) m->numbers[k]=row+k;
-            }
-        }
-        // ZONE 2 : ZONE SPECIALE (10% du temps intérieur)
-        // RESTRICTION : Uniquement Single 0/00 OU Split 0-00
-        else {
-            int special_type = rand() % 2; 
-
-            if (special_type == 0) { 
-                // SINGLE ZERO (0 ou 00)
-                m->type = BET_SINGLE; m->count = 1;
-                m->numbers[0] = (rand()%2 == 0) ? 0 : 37;
-            }
-            else { 
-                // SPLIT VERTICAL (0-00) UNIQUEMENT
-                // Les trios, top lines et splits frontières sont supprimés
-                m->type = BET_SPLIT; m->count = 2;
-                m->numbers[0]=0; m->numbers[1]=37;
+                m->numbers[0] = base; m->numbers[1] = base + 1;
+            } else { // Vertical
+                int base = 1 + rand() % 33;
+                m->numbers[0] = base; m->numbers[1] = base + 3;
             }
         }
     }
+
+    else {
+        m->type = BET_SINGLE; m->count = 1;
+        // 0 à 37 (inclus 00 représenté par 37)
+        m->numbers[0] = rand() % 38; 
+    }
 }
+
+
 
 // register the player in the shared table
 
