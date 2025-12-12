@@ -1,4 +1,4 @@
-/* app.c */
+// app.c
 #include "shared.h"
 #include "raylib.h"
 #include <math.h>
@@ -15,13 +15,13 @@ const int PANEL_W = 300;
 
 // POSITION DE LA GRILLE SUR L'IMAGE (En pixels)
 // Basé sur l'image fournie, on estime le coin haut-droite de la case "3" (première case rouge en haut)
-const int GRID_ORIGIN_X = 600;  // Décalage horizontal du début de la grille
+const int GRID_ORIGIN_X = 601;  // Décalage horizontal du début de la grille
 const int GRID_ORIGIN_Y = 169;  // Décalage vertical de la ligne du haut (3, 6, 9...)
 
 // TAILLE DES CASES SUR L'IMAGE
 const int CELL_W = 67;  // Largeur d'une case numéro
 const int CELL_H = 109;  // Hauteur d'une case numéro
-const int CELL_GAP = 5;
+const float CELL_GAP = 4.5f;
 
 const int OFFSET_Y_DOZENS = 25; 
 const int HEIGHT_DOZENS = 50;   // Hauteur visuelle de la case "1st 12"
@@ -42,7 +42,6 @@ float global_ball_angle = 0.0f;
 
 // COULEURS DES BOTS (Teinte appliquée sur le jeton blanc)
 Color bot_tints[] = { 
-    LIME,
     DARKPURPLE,
     DARKGREEN,
     ORANGE,
@@ -56,12 +55,9 @@ Color bot_tints[] = {
     GOLD,
     BLUE,
     GREEN,
-    PURPLE,
-    DARKBROWN,
     MAGENTA,
     BEIGE,
     WHITE,
-    BLACK
 };
 
 // ORDRE DE LA ROUE (Standard Américain selon l'image)
@@ -88,8 +84,10 @@ int is_red_num(int n) {
 Vector2 get_num_pos(int n) {
     // Cas Spéciaux 0 et 00 (A gauche)
     // On garde l'ajustement manuel car ils n'ont pas forcément le même gap
-    if(n == 0)  return (Vector2){GRID_ORIGIN_X - CELL_W - CELL_GAP, GRID_ORIGIN_Y + CELL_H * 0.5f + CELL_GAP + 45};
-    if(n == 37) return (Vector2){GRID_ORIGIN_X - CELL_W - CELL_GAP, GRID_ORIGIN_Y + CELL_H * 1.5f + CELL_GAP + 45};
+    if(n == 0)  return (Vector2){GRID_ORIGIN_X - (CELL_W / 1.75f) - (CELL_GAP * 0.5f) - 0.5f, GRID_ORIGIN_Y + (CELL_H * 2.25f) + (CELL_GAP * 0.5f) + 0.5f};
+    //if (n == 0) return (Vector2){0,0};
+    if(n == 37) return (Vector2){GRID_ORIGIN_X - (CELL_W / 1.75f) - (CELL_GAP * 0.5f) - 0.5f, GRID_ORIGIN_Y + (CELL_H * 0.75f) + (CELL_GAP * 0.5f) + 0.5f};
+    //if (n == 37) return (Vector2){0,0};
 
     // Grille 1-36
     int col = (n - 1) / 3;
@@ -103,17 +101,19 @@ Vector2 get_num_pos(int n) {
     else if (n % 3 == 2) row = 1; // Ligne du milieu
     else row = 2;                 // Ligne du bas
 
-    // --- LA CORRECTION EST ICI ---
+
     // On multiplie col par (CELL_W + CELL_GAP) au lieu de juste CELL_W
     float x = GRID_ORIGIN_X + col * (CELL_W + CELL_GAP) + (CELL_W / 2.0f);
     float y = GRID_ORIGIN_Y + row * (CELL_H + CELL_GAP) + (CELL_H / 2.0f);
     
+    //if (col >= 6) x -= 2.0f; 
+
     return (Vector2){x, y};
 }
 
 Vector2 get_bet_pos(Bet m) {
     // A. MISES SUR LES NUMEROS
-    if(m.type <= BET_TOP_LINE) {
+    if(m.type <= BET_DOUBLE_STREET) {
         if(m.count == 0) return (Vector2){0,0};
         
         float sx = 0, sy = 0;
@@ -127,7 +127,7 @@ Vector2 get_bet_pos(Bet m) {
 
         // Ajustement pour les mises "à cheval" sur la ligne gauche (Street/Sixain)
         if(m.type == BET_STREET || m.type == BET_DOUBLE_STREET) {
-            res.x -= CELL_W / 2.0f;
+            res.y = GRID_ORIGIN_Y;
         }
 
         // Jitter (Petit décalage aléatoire réduit pour être plus précis)
@@ -330,16 +330,29 @@ void gui_cleanup_int(int sig) {
 // atexit-friendly wrapper
 void gui_cleanup_atexit(void) { gui_cleanup_int(0); }
 
-int main() {
+int main(int argc, char *argv[]) {
 
     signal(SIGINT, gui_cleanup_int);
     signal(SIGTERM, gui_cleanup_int);
     signal(SIGHUP, gui_cleanup_int);
     atexit(gui_cleanup_atexit);
 
+    char str_bots[10] = "8"; // Défaut
+    int is_debug = 0;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--debug") == 0) {
+            is_debug = 1;
+        }
+        else if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
+            strncpy(str_bots, argv[i+1], 9);
+            i++;
+        }
+    }
+
     // 2. INIT FENETRE
     SetTraceLogLevel(LOG_NONE);
-    InitWindow(SCREEN_W, SCREEN_H, "Casino - Roulette Americaine");
+    InitWindow(SCREEN_W, SCREEN_H, "ETOPKCEJ - Roulette Americaine");
     SetTargetFPS(60);
 
     // 3. CHARGEMENT DES ASSETS
@@ -434,11 +447,16 @@ int main() {
                     if (pid_bots == 0) {
                         // child: create a new process group so we can kill the whole group later
                         setpgid(0,0);
-                        // child: replace with players binary
-                        execl("./dependencies/players", "./dependencies/players", (char*)NULL);
-                        perror("execl players");
+                            
+                        if (is_debug) {
+                            execl("./dependencies/players", "players", "--debug", NULL);
+                        } else {
+                            execl("./dependencies/players", "players", "--bots", str_bots, NULL);
+                        }
+                        
+                        perror("execl player");
                         _exit(127);
-                    }
+                        }
                 }
 
                 // Wait for shared memory segment to be created by the server
@@ -486,111 +504,237 @@ int main() {
 
         // Draw UI and status panel only when inside the game
         if (!in_menu) {
-            // C. Interface UI (Texte par dessus)
-            const char* status = "";
-            Color col = WHITE;
-            if(shm->state == BETS_OPEN) { status="FAITES VOS JEUX"; col=GREEN; }
-            else if(shm->state == BETS_CLOSED) { status="RIEN NE VA PLUS"; col=GOLD; }
-            else { if (shm->winning_number == 37) {
-                    status = "RESULTAT: 00";
-                } else {
-                    status = TextFormat("RESULTAT: %d", shm->winning_number);
-                }
-                col = RED;
+            if (shm->state == RESULTS) {
+                int win = shm->winning_number;
+                
+                // 1. Déterminer la couleur
+                Color resColor = DARKGREEN; // Par défaut pour 0 et 00
+                if (is_red_num(win)) resColor = RED;
+                else if (win != 0 && win != 37) resColor = BLACK;
+
+                // 2. Position (Sous la roue centrée)
+                // Roue centrée en X=250, Y=440. Rayon env. 180.
+                // On place la boite vers Y=660
+                int boxW = 100;
+                int boxH = 90;
+                int boxX = WHEEL_POS_X - boxW/2; 
+                int boxY = WHEEL_POS_Y + 260; 
+
+                // 3. Dessin de la boite
+                DrawRectangle(boxX, boxY, boxW, boxH, resColor);       // Fond Couleur
+                DrawRectangleLinesEx((Rectangle){boxX, boxY, boxW, boxH}, 3, GOLD); // Bordure Or
+                
+                // Ombre portée légère
+                DrawRectangleLinesEx((Rectangle){boxX+4, boxY+4, boxW, boxH}, 3, (Color){0,0,0,50});
+
+                // 4. Texte du Numéro
+                const char* txtNum = (win == 37) ? "00" : TextFormat("%d", win);
+                int txtSize = 50;
+                int txtW = MeasureText(txtNum, txtSize);
+                
+                // Centrage du texte
+                DrawText(txtNum, boxX + (boxW/2) - (txtW/2), boxY + (boxH/2) - (txtSize/2), txtSize, WHITE);
             }
 
-            // Bandeau noir semi-transparent en bas pour le texte
-            DrawRectangle(0, SCREEN_H - 60, SCREEN_W, 60, (Color){0,0,0,200});
-            DrawText(status, 20, SCREEN_H - 45, 30, col);
-            
             const char* textBank = TextFormat("BANQUE: %d $", shm->bank);
             DrawText(textBank, 20, 20, 40, GOLD);
 
-            // --- RIGHT STATUS PANEL ---
+            // --- RIGHT STATUS PANEL (Dashboard Final) ---
             int panel_x = SCREEN_W - PANEL_W;
-            DrawRectangle(panel_x, 0, PANEL_W, SCREEN_H, (Color){20,20,20,220});
-            // Draw right-panel fields using a vertical cursor to avoid overlapping
-                time_t now = time(NULL);
-                int py = 12;
-                DrawText("STATUS PANEL", panel_x + 10, py, 20, RAYWHITE);
-                py += 28;
+            time_t now = time(NULL);
+            
+            // 1. FOND ET TITRE
+            DrawRectangle(panel_x, 0, PANEL_W, SCREEN_H, (Color){15, 15, 20, 245}); // Fond bleu nuit
+            DrawLine(panel_x, 0, panel_x, SCREEN_H, (Color){255, 215, 0, 100}); // Ligne Or
+            
+            DrawText("ETOPKCAJ", panel_x + 20, 15, 24, GOLD);
+            DrawRectangle(panel_x + 20, 45, PANEL_W - 40, 2, (Color){255, 215, 0, 50});
 
-                DrawText(TextFormat("Mutex locked: %s", shm->mutex_status ? "YES" : "NO"), panel_x + 10, py, 16, WHITE);
-                py += 20;
+            // 2. BLOC BANQUE & MISES
+            int y_stats = 60;
+            DrawRectangle(panel_x + 10, y_stats, PANEL_W - 20, 80, (Color){255, 255, 255, 10});
+            DrawRectangleLines(panel_x + 10, y_stats, PANEL_W - 20, 80, (Color){255, 255, 255, 30});
+            
+            DrawText("BANQUE COMMUNE", panel_x + 20, y_stats + 10, 10, LIGHTGRAY);
+            DrawText(TextFormat("%d$", shm->bank), panel_x + 20, y_stats + 25, 28, (shm->bank > 0) ? GOLD : RED);
+            
+            DrawText("NBR DE MISES", panel_x + 160, y_stats + 10, 10, LIGHTGRAY);
+            DrawText(TextFormat("%d", shm->total_bets), panel_x + 160, y_stats + 25, 28, SKYBLUE);
 
-                DrawText(TextFormat("Mutex owner PID: %d", (int)shm->mutex_owner), panel_x + 10, py, 16, WHITE);
-                py += 20;
+            // 3. BLOC ETAT DU JEU
+            int y_state = 150;
+            Color stateColor = GRAY;
+            const char* stateText = "INCONNU";
+            
+            if (shm->state == BETS_OPEN) { stateColor = LIME; stateText = "OUVERT - PARIS EN COURS"; }
+            else if (shm->state == BETS_CLOSED) { stateColor = ORANGE; stateText = "FERME - RIEN NE VA PLUS"; }
+            else if (shm->state == RESULTS) { stateColor = RED; stateText = "RESULTATS & PAIEMENT"; }
 
-                // Show owner's last_seen if available
-                if (shm->mutex_owner != 0) {
-                    int owner_last = -1;
-                    for (int i = 0; i < MAX_BOTS; i++) {
-                        if (shm->players[i].pid == shm->mutex_owner) {
-                            owner_last = (int)(now - shm->players[i].last_seen);
-                            break;
-                        }
-                    }
-                    if (owner_last >= 0) DrawText(TextFormat("Owner last_seen: %ds", owner_last), panel_x + 10, py, 14, WHITE);
-                    else DrawText("Owner last_seen: ?", panel_x + 10, py, 14, WHITE);
-                    py += 18;
-                }
+            DrawRectangle(panel_x + 10, y_state, PANEL_W - 20, 30, Fade(stateColor, 0.2f));
+            DrawRectangleLines(panel_x + 10, y_state, PANEL_W - 20, 30, stateColor);
+            DrawText(stateText, panel_x + 20, y_state + 8, 12, stateColor);
 
-                DrawText(TextFormat("Total bets: %d", shm->total_bets), panel_x + 10, py, 14, WHITE);
-                py += 18;
-
-                DrawText(TextFormat("Bank: %d$", shm->bank), panel_x + 10, py, 16, GOLD);
-                py += 22;
-
-                // Players status list - start below the fields
-                int yoff = py + 6;
-                if (yoff < 140) yoff = 140;
-                DrawText("Players:", panel_x + 10, yoff, 18, RAYWHITE);
-            yoff += 22;
-            for (int i = 0; i < MAX_BOTS && yoff < SCREEN_H - 20; i++) {
-                if (shm->players[i].pid == 0) continue;
-                int status = shm->players[i].status;
-                int pid = shm->players[i].pid;
-                int color = shm->players[i].color_id;
-                time_t last = shm->players[i].last_seen;
-                int ago = (int)(now - last);
-                const char *al = status ? "status" : "DEAD";
-                DrawText(TextFormat("#%d PID:%d %s (%ds) C:%d", i+1, pid, al, ago, color+1), panel_x + 10, yoff, 16, status ? GREEN : RED);
-                yoff += 20;
+            // 4. BLOC TECHNIQUE (MUTEX)
+            int y_tech = 205;
+            DrawText("STATUS MUTEX", panel_x + 20, y_tech, 12, GRAY);
+            
+            Color ledColor = shm->mutex_status ? RED : GREEN;
+            DrawCircle(panel_x + 25, y_tech + 25, 6, ledColor);
+            DrawText(shm->mutex_status ? "VERROUILLE" : "LIBRE", panel_x + 40, y_tech + 18, 14, ledColor);
+            
+            if (shm->mutex_status) {
+                DrawText(TextFormat("PAR PID: %d", shm->mutex_owner), panel_x + 140, y_tech + 18, 14, WHITE);
             }
 
-            // --- MUTEX EVENT HISTORY (console) ---
-            int hist_height = 200;
-            int hist_y = SCREEN_H - hist_height - 10;
-            // draw game state just above history
-            const char *gstate = "?";
-            if (shm->state == BETS_OPEN) gstate = "BETS_OPEN";
-            else if (shm->state == BETS_CLOSED) gstate = "BETS_CLOSED";
-            else if (shm->state == RESULTS) gstate = "RESULTS";
-            DrawText(TextFormat("Game state: %s", gstate), panel_x + 10, hist_y - 18, 16, WHITE);
+            // 5. LISTE DES JOUEURS (Tableau Détaillé)
+            int y_list = 265;
+            DrawText(TextFormat("JOUEURS (%d)", shm->player_count), panel_x + 20, y_list, 14, GOLD);
+            DrawRectangle(panel_x + 20, y_list + 18, PANEL_W - 40, 1, GRAY);
+            
+            int col_py = y_list + 25;
+            // En-têtes : ID | PID | PARI | C. | PING
+            DrawText("ID",   panel_x + 15, col_py, 10, DARKGRAY);
+            DrawText("PID",  panel_x + 40, col_py, 10, DARKGRAY);
+            DrawText("PARI", panel_x + 90, col_py, 10, DARKGRAY);
+            DrawText("COUL.",   panel_x + 215, col_py, 10, DARKGRAY);
+            DrawText("PING", panel_x + 250, col_py, 10, DARKGRAY);
+            
+            int row_y = col_py + 15;
+            int log_h = 180;
+            
+            for (int i = 0; i < MAX_BOTS; i++) {
+                if (shm->players[i].pid == 0) continue; 
+                if (row_y > SCREEN_H - log_h - 20) break; 
 
-            DrawRectangle(panel_x + 6, hist_y, PANEL_W - 12, hist_height, (Color){10,10,10,200});
-            DrawText("Mutex history:", panel_x + 10, hist_y + 6, 16, RAYWHITE);
+                int pid = shm->players[i].pid;
+                
+                // --- CALCUL DU "VRAI" PING (Dernière action Mutex) ---
+                time_t last_action_ts = 0;
+                // On scanne l'historique pour trouver la dernière trace de ce PID
+                for(int k=0; k < MUTEX_EVENT_HISTORY; k++) {
+                    if (shm->mutex_events[k].pid == pid) {
+                        if (shm->mutex_events[k].ts > last_action_ts) {
+                            last_action_ts = shm->mutex_events[k].ts;
+                        }
+                    }
+                }
 
-            int max_lines = (hist_height - 24) / 16; // approx lines that fit
+                int ago = (last_action_ts > 0) ? (int)(now - last_action_ts) : -1;
+
+                // Couleur de la ligne (Grise si pas d'action depuis 10s)
+                Color rowCol = (ago > 10 || ago == -1) ? DARKGRAY : WHITE; 
+                
+                // 1. ID
+                DrawText(TextFormat("%d", i+1), panel_x + 15, row_y, 12, rowCol);
+
+                // 2. PID
+                DrawText(TextFormat("%d", pid), panel_x + 40, row_y, 12, rowCol);
+                
+                // 3. PARI (Recherche inchangée)
+                const char* betStr = "-";
+                Color betCol = GRAY;
+                for(int b=0; b < shm->total_bets; b++) {
+                    if (shm->bets[b].pid == pid) {
+                        betCol = SKYBLUE;
+                        Bet m = shm->bets[b];
+                        switch(m.type) {
+                            case BET_SINGLE: betStr = TextFormat("Plein %d", m.numbers[0]); if(m.numbers[0]==37) betStr="Plein 00"; break;
+                            case BET_SPLIT:  
+                                if(m.numbers[1]==37) betStr = "Cheval 0-00"; 
+                                else betStr = TextFormat("Cheval %d-%d", m.numbers[0], m.numbers[1]); 
+                                break;
+                            case BET_STREET: betStr = TextFormat("Traversale %d : %d", m.numbers[0], m.numbers[2]); break;
+                            case BET_SQUARE: betStr = TextFormat("Carre %d-%d-%d-%d", m.numbers[0], m.numbers[1], m.numbers[2], m.numbers[3]); break;
+                            case BET_DOUBLE_STREET: betStr = TextFormat("Sixain %d : %d", m.numbers[0], m.numbers[5]); break;
+                            case BET_RED:   betStr = "ROUGE"; betCol=RED; break;
+                            case BET_BLACK: betStr = "NOIR"; betCol=GRAY; break;
+                            case BET_EVEN:  betStr = "PAIR"; break;
+                            case BET_ODD:   betStr = "IMPAIR"; break;
+                            case BET_LOW:   betStr = "1 a 18"; break;
+                            case BET_HIGH:  betStr = "19 a 36"; break;
+                            case BET_DOZEN_1: betStr = "1ere 12"; break;
+                            case BET_DOZEN_2: betStr = "2eme 12"; break;
+                            case BET_DOZEN_3: betStr = "3eme 12"; break;
+                            case BET_COL_1: betStr = "COL 1"; break;
+                            case BET_COL_2: betStr = "COL 2"; break;
+                            case BET_COL_3: betStr = "COL 3"; break;
+                            default: betStr = "?"; break;
+                        }
+                        break; 
+                    }
+                }
+                DrawText(betStr, panel_x + 90, row_y, 10, betCol);
+
+                // 4. COULEUR
+                DrawCircle(panel_x + 225, row_y + 6, 5, bot_tints[shm->players[i].color_id]);
+                DrawCircleLines(panel_x + 225, row_y + 6, 6, WHITE); 
+
+                // 5. PING (Basé sur le Mutex cette fois)
+                if (ago != -1) {
+                    Color pingCol = (ago < 4) ? GREEN : (ago < 10 ? YELLOW : RED);
+                    DrawText(TextFormat("%ds", ago), panel_x + 250, row_y, 12, pingCol);
+                } else {
+                    DrawText("-", panel_x + 250, row_y, 12, DARKGRAY);
+                }
+
+                row_y += 20;
+            }
+
+            // 6. INFO SERVEUR ET HISTORIQUE (En bas)
+            int log_y = SCREEN_H - log_h - 10;
+
+            // --- INFO SERVEUR ---
+            // Calcul Ping Serveur (scan logs)
+            time_t srv_last = 0;
+            for(int k=0; k < MUTEX_EVENT_HISTORY; k++) {
+                if (shm->mutex_events[k].pid == pid_server && shm->mutex_events[k].ts > srv_last) 
+                    srv_last = shm->mutex_events[k].ts;
+            }
+            int srv_ago = (srv_last > 0) ? (int)(now - srv_last) : -1;
+            
+            int y_srv_info = log_y - 25;
+            DrawText("SERVER", panel_x + 15, y_srv_info, 14, GOLD);
+            DrawText(TextFormat("PID: %d", pid_server), panel_x + 90, y_srv_info, 11, LIGHTGRAY);
+            DrawText("PING:", panel_x + 210, y_srv_info, 11, LIGHTGRAY);
+            if (srv_ago != -1) {
+                Color sCol = (srv_ago < 4) ? GREEN : (srv_ago < 10 ? YELLOW : RED);
+                DrawText(TextFormat("%ds", srv_ago), panel_x + 250, y_srv_info, 12, sCol);
+            } else {
+                DrawText("-", panel_x + 250, y_srv_info, 12, DARKGRAY);
+            }
+
+            // --- SYSLOG ---
+            DrawRectangle(panel_x + 10, log_y, PANEL_W - 20, log_h, (Color){0, 0, 0, 180});
+            DrawRectangleLines(panel_x + 10, log_y, PANEL_W - 20, log_h, DARKGRAY);
+            DrawText("> SYSLOG (HISTORY)", panel_x + 15, log_y + 5, 10, GREEN);
+
+            int max_lines = (log_h - 20) / 14;
             int count = shm->mutex_events_count;
             if (count > MUTEX_EVENT_HISTORY) count = MUTEX_EVENT_HISTORY;
             if (count > max_lines) count = max_lines;
 
-            // draw newest at bottom -> walk backwards from head-1
             int head = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
-            int line = 0;
+            
             for (int i = 0; i < count; i++) {
                 int idx = head - 1 - i;
                 if (idx < 0) idx += MUTEX_EVENT_HISTORY;
+                
                 time_t ts = shm->mutex_events[idx].ts;
-                pid_t pid = shm->mutex_events[idx].pid;
+                // Formatage Heure Absolue (HH:MM:SS) pour éviter le clignotement
+                struct tm *tm_info = localtime(&ts);
+                char timeBuffer[9];
+                strftime(timeBuffer, 9, "%H:%M:%S", tm_info);
+                
                 int status = shm->mutex_events[idx].status;
-                int ago = (int)(now - ts);
-                const char *act = status ? "LOCK" : "UNLK";
-                int y = hist_y + hist_height - 6 - (i * 16) - 14;
-                DrawText(TextFormat("%3ds %s PID:%d", ago, act, (int)pid), panel_x + 10, y, 14, LIGHTGRAY);
-                line++;
+                Color logCol = status ? YELLOW : GRAY;
+                const char* act = status ? "LOCK" : "FREE";
+                
+                int line_y = log_y + log_h - 18 - (i * 14);
+                // Affiche [HH:MM:SS] au lieu de [02s]
+                DrawText(TextFormat("[%s] %s PID:%d", timeBuffer, act, shm->mutex_events[idx].pid), 
+                         panel_x + 15, line_y, 10, logCol);
             }
+
             // If this round had no winners, show the 'PERDU' panel in the middle
             if (shm->state == RESULTS && show_lost_panel) {
                 // Darken background
