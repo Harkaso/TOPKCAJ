@@ -1,12 +1,35 @@
-// players.c
+/**
+ * @file players.c
+ * @brief Programme client gérant les Bots (Joueurs autonomes).
+ *
+ * Ce fichier contient la logique des processus enfants qui simulent des joueurs.
+ * Ils se connectent à la mémoire partagée, surveillent l'état du jeu,
+ * placent des paris basés sur des probabilités et gèrent leur cycle de vie.
+ */
+
 #include "shared.h"
 #include <sys/wait.h>
 #include <signal.h>
 
+/**
+ * @brief Flag global de contrôle d'exécution.
+ * 
+ * Modifié par le gestionnaire de signal (SIGINT/SIGTERM) pour permettre
+ * une sortie propre de la boucle de jeu.
+ */
 volatile sig_atomic_t running = 1;
 
 
-// helper to append mutex events into SHM circular buffer (caller should hold shm->mutex)
+/**
+ * @brief Enregistre un événement de mutex dans le buffer circulaire.
+ * 
+ * Utilitaire interne pour logger les accès au sémaphore 
+ * dans la structure partagée.
+ * 
+ * @param shm Pointeur vers la mémoire partagée.
+ * @param pid PID du processus générant l'événement.
+ * @param status 1 pour Verrouillage, 0 pour Déverrouillage.
+ */
 static void push_mutex_event(SharedResource *shm, pid_t pid, int status) {
     if (!shm) return;
     int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
@@ -17,22 +40,19 @@ static void push_mutex_event(SharedResource *shm, pid_t pid, int status) {
     if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
 }
 
-/*
-score formula = 100 - (ABS(N-4) * 4) + (N * 3,5)
 
-+-----------+-----+-------+---------+-------+
-| name      | num | score | perc (%)| seuil |
-|-----------|-----|-------|---------|-------|
-| carre     | 4   | 114.0 | 15.38 % | 1538  |
-| sixain    | 6   | 113.0 | 15.25 % | 3063  |
-| col/doz   | 12  | 110.0 | 14.84 % | 4548  |
-| simple    | 18  | 107.0 | 14.44 % | 5992  |
-| transver. | 3   | 106.5 | 14.37 % | 7429  |
-| cheval    | 2   | 99.0  | 13.36 % | 8760  |
-| plein     | 1   | 91.5  | 12.35 % | -     |
-+-----------+-----+-------+---------+-------+
-*/
-
+/**
+ * @brief Génère un pari aléatoire réaliste.
+ * 
+ * Utilise un générateur de nombres aléatoires et une formule mathématique
+ * pour déterminer le type de pari et créer la mise.
+ * 
+ * `Formule de score: 100 - (ABS(N-4) * 4) + (N * 3,5)`
+ * 
+ * @param m Pointeur vers la structure Bet à remplir.
+ * @param player_id Identifiant du joueur (utilisé pour déterminer la couleur du jeton).
+ * @param bet_price Montant de la mise à jouer.
+ */
 void create_random_bet(Bet *m, int player_id, int bet_price) {
     m->pid = getpid();
     m->color_id = player_id;
@@ -73,15 +93,14 @@ void create_random_bet(Bet *m, int player_id, int bet_price) {
 
     else if (roll < 8760) {
         m->type = BET_SPLIT; m->count = 2;
-        // 5% de chance de tenter un Split spécial avec 0
         if (rand() % 20 == 0) {
-             m->numbers[0]=0; m->numbers[1]=37; // 0-00
+             m->numbers[0]=0; m->numbers[1]=37;
         } else {
-            if (rand() % 2 == 0) { // Horizontal
+            if (rand() % 2 == 0) {
                 int base = 1 + rand() % 35;
                 if (base % 3 == 0) base--; 
                 m->numbers[0] = base; m->numbers[1] = base + 1;
-            } else { // Vertical
+            } else {
                 int base = 1 + rand() % 33;
                 m->numbers[0] = base; m->numbers[1] = base + 3;
             }
@@ -90,65 +109,34 @@ void create_random_bet(Bet *m, int player_id, int bet_price) {
 
     else {
         m->type = BET_SINGLE; m->count = 1;
-        // 0 à 37 (inclus 00 représenté par 37)
         m->numbers[0] = rand() % 38; 
     }
 }
 
-
-
-// register the player in the shared table
-
-// helper: register slot
-int register_player(SharedResource *shm_local, int pid_color) {
-    int idx = -1;
-    sem_wait(&shm_local->mutex);
-
-    // Log lock
-    shm_local->mutex_status = 1; shm_local->mutex_owner = getpid();
-    push_mutex_event(shm_local, shm_local->mutex_owner, 1);
-
-    // Recherche slot vide
-    for (int i = 0; i < MAX_BOTS; i++) {
-        if (shm_local->players[i].status == 0) {
-            shm_local->players[i].pid = getpid();
-            shm_local->players[i].status = 1;
-            shm_local->players[i].color_id = pid_color;
-            shm_local->players[i].last_seen = time(NULL);
-            shm_local->player_count++;
-            idx = i;
-            break;
-        }
-    }
-
-    // Log unlock
-    shm_local->mutex_status = 0; shm_local->mutex_owner = 0;
-    push_mutex_event(shm_local, getpid(), 0);
-    sem_post(&shm_local->mutex);
-    return idx;
-}
-
-void deregister_player(SharedResource *shm_local, int slot) {
-    if (slot < 0) return;
-    sem_wait(&shm_local->mutex);
-    shm_local->mutex_status = 1; shm_local->mutex_owner = getpid();
-    push_mutex_event(shm_local, shm_local->mutex_owner, 1);
-    shm_local->players[slot].status = 0;
-    shm_local->players[slot].pid = 0;
-    shm_local->players[slot].color_id = 0;
-    shm_local->players[slot].last_seen = 0;
-    if (shm_local->player_count > 0) shm_local->player_count--;
-    shm_local->mutex_status = 0; shm_local->mutex_owner = 0;
-    push_mutex_event(shm_local, getpid(), 0);
-    sem_post(&shm_local->mutex);
-}
-
-// signal handler to try cleanup on graceful termination
+/**
+ * @brief Gestionnaire de signal (SIGINT/SIGTERM).
+ * 
+ * Passe le flag `running` à 0 pour terminer proprement la boucle principale.
+ * @param sig Numéro du signal reçu.
+ */
 void handle_sig(int sig) {
     running = 0;
 }
 
-void lancer_bot(int player_id, int bet_price) {
+/**
+ * @brief Fonction principale d'un processus joueur.
+ * 
+ * Exécute le cycle de vie complet d'un joueur :
+ * 1. Attachement à la mémoire partagée.
+ * 2. Boucle de jeu :
+ *    - Surveillance de l'état du jeu et attendre de pouvoir jouer.
+ *    - Prise de décision et placement du pari.
+ * 3. Nettoyage et sortie.
+ * 
+ * @param player_id ID interne du joueur pour la couleur du jeton.
+ * @param bet_price Montant de la mise.
+ */
+void launch_bot(int player_id, int bet_price) {
     srand(time(NULL) ^ (getpid()<<16));
     
     // Attachement SHM
@@ -156,30 +144,19 @@ void lancer_bot(int player_id, int bet_price) {
     if (shmid < 0) exit(1);
     SharedResource *shm = (SharedResource *)shmat(shmid, NULL, 0);
 
-    // Signaux
+    // Gestion des signaux
     signal(SIGTERM, handle_sig);
     signal(SIGINT, handle_sig);
 
-    // Enregistrement
-    int reg_slot = register_player(shm, player_id);
     int bet_placed = 0;
-    time_t last_heartbeat = 0;
 
     // Boucle principale
     while (running) {
-        // Heartbeat (battement de coeur pour le GUI)
-        if (reg_slot >= 0 && difftime(time(NULL), last_heartbeat) >= 1.0) {
-            sem_wait(&shm->mutex);
-            // On évite les logs trop fréquents pour le heartbeat sinon ça flood l'historique
-            shm->players[reg_slot].last_seen = time(NULL);
-            sem_post(&shm->mutex);
-        }
-
         // Logique de pari
         if (shm->state == BETS_OPEN && !bet_placed) {
             usleep((rand() % 2300001) + 150000);
             
-            // Section Critique : Placer le pari
+            // Placer le pari
             sem_wait(&shm->mutex);
             shm->mutex_status = 1; shm->mutex_owner = getpid();
             usleep(200000);
@@ -191,12 +168,11 @@ void lancer_bot(int player_id, int bet_price) {
                 shm->total_gains -= bet_price;
                 Bet m;
                 
-                create_random_bet(&m, player_id, bet_price); // Mode jeu
+                create_random_bet(&m, player_id, bet_price);
                 
                 shm->bets[shm->total_bets] = m;
                 shm->total_bets++;
                 bet_placed = 1;
-                if (reg_slot >= 0) shm->players[reg_slot].last_seen = time(NULL);
             }
 
             shm->mutex_status = 0; shm->mutex_owner = 0;
@@ -207,39 +183,47 @@ void lancer_bot(int player_id, int bet_price) {
         // Reset pour le prochain tour
         if (shm->state == RESULTS) bet_placed = 0;
         
-        usleep(100000); // 0.1s de pause processeur
+        usleep(100000);
     }
 
-    // --- NETTOYAGE PROPRE ---
-    if (reg_slot >= 0) deregister_player(shm, reg_slot);
+    // Gestion de l'arrêt
     shmdt(shm);
     exit(0);
 }
 
+/**
+ * @brief Point d'entrée du Launcher de Bots.
+ * 
+ * Parse les arguments ligne de commande et utilise `fork()` pour lancer
+ * le nombre spécifié de processus joueurs en parallèle.
+ * 
+ *  * Accepte les arguments en ligne de commande :
+ * - `--bots <int>` : Nombre de joueurs a initialisé (de 4 à 16).
+ */
 int main(int argc, char *argv[]) {
     int bots_to_launch = DEFAULT_BOTS;
     int bet_price = DEFAULT_BET_PRICE;
 
+       // Parsing des arguments
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
             bots_to_launch = atoi(argv[i+1]); i++;
         }
         else if (strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
-            bet_price = atoi(argv[i+1]); i++; // On récupère le prix
+            bet_price = atoi(argv[i+1]); i++;
         }
     }
 
     printf("[Server] %d joueurs ont rejoint la partie.\n", bots_to_launch);
 
+    // Lancement des bots joueurs
     for (int i = 0; i < bots_to_launch; i++) {
         if (fork() == 0) { 
-            // On passe l'ID (i) pour la couleur
-            lancer_bot(i % 16, bet_price); 
+            launch_bot(i % 16, bet_price); 
             exit(0); 
         }
     }
     
-    // Le père attend indéfiniment
     while(wait(NULL) > 0);
     return 0;
 }

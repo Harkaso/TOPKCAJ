@@ -1,15 +1,43 @@
-// server.c
-#include "shared.h"
+/**
+ * @file server.c
+ * @brief Le Croupier : Serveur central de gestion du jeu.
+ *
+ * Ce fichier contient la logique principale du casino.
+ * Il est responsable de :
+ * - Créer et initialiser la Mémoire Partagée et le Sémaphore.
+ * - Gérer les phases de jeu.
+ * - Générer le numéro gagnant aléatoire.
+ * - Calculer les gains et redistribuer la banque commune.
+ */
 
-#define OPEN_TIME 10
-#define CLOSE_TIME 2
-#define RESULT_TIME 13
-// Watchdog: if a process holds the mutex but its last_seen is older than this many seconds,
-// the server will try to clear the lock to avoid permanent deadlock.
-#define MUTEX_WATCHDOG_SECONDS 6
+ #include "shared.h"
+
+ /**
+ * @defgroup TimeSettings Paramètres de Temporisation
+ * @brief Durées des différentes phases de jeu en secondes.
+ * @{
+ */
+#define OPEN_TIME 10   /**< Durée de la phase de mise (FAITES VOS JEUX). */
+#define CLOSE_TIME 2   /**< Durée de la phase de fermeture (RIEN NE VA PLUS). */
+#define RESULT_TIME 13 /**< Durée de l'affichage des résultats et du paiements. */
+/** @} */
+
+/** @brief Identifiant système de la mémoire partagée (SHM ID). */
 int shmid;
+
+/** @brief Pointeur vers la structure partagée attachée à l'espace d'adressage. */
 SharedResource *shm;
 
+/**
+ * @brief Gestionnaire de signal pour un arrêt propre.
+ * 
+ * Intercepte SIGINT (Ctrl+C) et SIGTERM.
+ * - Détruit le sémaphore POSIX.
+ * - Détache la mémoire partagée.
+ * - Supprime le segment SHM du système.
+ * 
+ * @param sig Numéro du signal reçu.
+ */
 void cleanup(int sig) {
     printf("\n[Server] Arret du jeu...\n");
     if (shm != NULL) {
@@ -20,6 +48,15 @@ void cleanup(int sig) {
     exit(0);
 }
 
+/**
+ * @brief Vérifie si un numéro de roulette est Rouge.
+ * 
+ * Utilise un tableau codé en dur correspondant à la disposition
+ * standard de la roulette.
+ * 
+ * @param n Le numéro à vérifier.
+ * @return int 1 si le numéro est ROUGE, 0 s'il est NOIR ou VERT.
+ */
 int is_red(int n) {
     if (n == 0 || n == 37) return 0;
     int reds[] = {1,3,5,7,9,12,14,16,18,19,21,23,25,27,30,32,34,36};
@@ -27,10 +64,27 @@ int is_red(int n) {
     return 0;
 }
 
+/**
+ * @brief Détermine si un type de pari est une "Mise Intérieure".
+ * 
+ * Les mises intérieures ont des rapports de gain plus élevés
+ * mais des probabilités plus faibles.
+ * 
+ * @param type Le type de pari.
+ * @return int 1 si c'est une mise intérieure, 0 sinon (mise extérieure).
+ */
 int is_inside_bet(int type) {
     return (type >= BET_SINGLE && type <= BET_DOUBLE_STREET);
 }
 
+/**
+ * @brief Affiche une description textuelle d'un pari dans la console.
+ * 
+ * Traduit la mise (struct Bet) en une chaîne de caractères comprehensible
+ * afficher dans la console.
+ * 
+ * @param m La structure du pari à décrire.
+ */
 void print_bet_desc(Bet m) {
     switch(m.type) {
         case BET_SINGLE: printf("PLEIN sur %d", m.numbers[0]); break;
@@ -54,14 +108,33 @@ void print_bet_desc(Bet m) {
     }
 }
 
+/**
+ * @brief Point d'entrée du Serveur (Croupier).
+ * 
+ * Orchestre la boucle du jeu :
+ * 1. Initialisation de l'IPC, la mémoire partager, la sémaphore POSIX, etc.
+ * 2. Phase d'ouverture des mises.
+ * 3. Verrouillage critique.
+ * 4. Tirage aléatoire du numéro gagnant.
+ * 5. Recherche des gagnants et calcul des gains.
+ * 6. paimement et affichage des résultats.
+ * 
+ * Accepte les arguments en ligne de commande :
+ * - `--bank <int>` : Montant initial de la banque commune de joueurs.
+ * - `--bet-price <int>` : Prix d'une mise.
+ */
 int main(int argc, char *argv[]) {
+    // Gestion des signaux
     signal(SIGINT, cleanup);
     signal(SIGTERM, cleanup);
+
+    // Générateur aléatoire unifié par processus
     srand(time(NULL) ^ (getpid()<<16));
 
     int start_bank = DEFAULT_BANK;
     int bet_price = DEFAULT_BET_PRICE;
 
+    // Parsing des arguments
     for(int i=1; i<argc; i++) {
         if(strcmp(argv[i], "--bank") == 0 && i+1 < argc) {
             start_bank = atoi(argv[i+1]); i++;
@@ -71,28 +144,18 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Création SHM
+    // Initialisation SHM
     shmid = shmget(SHM_KEY, sizeof(SharedResource), IPC_CREAT | 0666);
     if (shmid < 0) { perror("shmget"); exit(1); }
     shm = (SharedResource *)shmat(shmid, NULL, 0);
     
-    // --- INITIALISATION SEMAPHORE POSIX ---
-    // Param 1: pointeur vers le sem
-    // Param 2: 1 = partagé entre processus (C'est ce qui remplace IPC System V) [cite: 644]
-    // Param 3: 1 = valeur initiale (déverrouillé) [cite: 646]
+    // initialisation sémaphore POSIX
     sem_init(&shm->mutex, 1, 1); 
 
     shm->state = BETS_OPEN;
     shm->total_bets = 0;
     shm->bank = start_bank;
 
-    // Initialize player registry
-    for (int i = 0; i < MAX_BOTS; i++) {
-        shm->players[i].pid = 0;
-        shm->players[i].status = 0;
-        shm->players[i].color_id = 0;
-        shm->players[i].last_seen = 0;
-    }
     shm->player_count = 0;
     shm->mutex_status = 0;
     shm->mutex_owner = 0;
@@ -102,110 +165,55 @@ int main(int argc, char *argv[]) {
     printf("[Server] Lancement du jeu...\n");
     usleep(100000);
 
+    // Boucle principale
     while (1) {
-        // --- WATCHDOG: detect stale mutex owner and try to recover ---
-        if (shm->mutex_status && shm->mutex_owner != 0) {
-            // find owner in players and check last_seen
-            time_t now = time(NULL);
-            int owner_idx = -1;
-            for (int i = 0; i < MAX_BOTS; i++) {
-                if (shm->players[i].pid == shm->mutex_owner) { owner_idx = i; break; }
-            }
-
-            int stale = 0;
-            if (owner_idx >= 0) {
-                if (now - shm->players[owner_idx].last_seen > MUTEX_WATCHDOG_SECONDS) stale = 1;
-            } else {
-                // owner not found in players list -> consider stale
-                stale = 1;
-            }
-
-            if (stale) {
-                int sval = 0;
-                sem_getvalue(&shm->mutex, &sval);
-                if (sval == 0) {
-                    // semaphore appears locked; try to post and clear flags
-                    printf("[Server-Watchdog] Detected stale mutex owner PID %d, releasing semaphore...\n", (int)shm->mutex_owner);
-                    sem_post(&shm->mutex); // try to release
-                } else {
-                    printf("[Server-Watchdog] Detected stale mutex owner PID %d but semaphore value=%d; clearing flags\n", (int)shm->mutex_owner, sval);
-                }
-                // record unlock event
-                int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
-                shm->mutex_events[idx].ts = time(NULL);
-                shm->mutex_events[idx].pid = shm->mutex_owner;
-                shm->mutex_events[idx].status = 0;
-                shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
-                if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
-
-                shm->mutex_status = 0;
-                shm->mutex_owner = 0;
-            }
-        }
-        // --- PHASE 1: MISES OUVERTES ---
+        // Phase 1: Mises ouvertes
         printf("\n[Croupier] FAITES VOS JEUX\n");
         shm->state = BETS_OPEN;
         sleep(OPEN_TIME);
 
-        // --- PHASE 2: RIEN NE VA PLUS ---
+        // Phase 2: Fin des mises
         printf("[Croupier] RIEN NE VA PLUS\n");
         sem_wait(&shm->mutex);
         shm->mutex_status = 1; 
         shm->mutex_owner = getpid();
         usleep(200000);
-        // record lock event
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
             shm->mutex_events[idx].ts = time(NULL);
             shm->mutex_events[idx].pid = shm->mutex_owner;
-            shm->mutex_events[idx].status = 1; // LOCK
+            shm->mutex_events[idx].status = 1;
             shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
             if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
         }
-        shm->state = BETS_CLOSED;
-        /*
-        // record unlock event
-        {
-            int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
-            shm->mutex_events[idx].ts = time(NULL);
-            shm->mutex_events[idx].pid = getpid();
-            shm->mutex_events[idx].status = 0;
-            shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
-            if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
-        }
-        shm->mutex_status = 0; shm->mutex_owner = 0;
-        sem_post(&shm->mutex);  
-        */      
+        shm->state = BETS_CLOSED;   
         sleep(CLOSE_TIME);
 
-        // --- PHASE 3: TIRAGE ---
+        // Phase 3: Tirage
         int win = rand() % 38;
         shm->winning_number = win;
 
+        // Affichage des résultats
         printf("[Croupier] RESULTAT: ");
         if (win == 37) printf("%s", "00 | VERT");
         else if (win == 0) printf("%s", "0 | VERT");
         else {
-            // --- Calcul des propriétés pour l'affichage ---
-            const char* s_color = is_red(win) ? "ROUGE" : "NOIR";
-            const char* s_parity = (win % 2 == 0) ? "PAIR" : "IMPAIR";
-            const char* s_half = (win <= 18) ? "1 A 18" : "19 A 36";
+            const char* str_color = is_red(win) ? "ROUGE" : "NOIR";
+            const char* str_parity = (win % 2 == 0) ? "PAIR" : "IMPAIR";
+            const char* str_half = (win <= 18) ? "1 A 18" : "19 A 36";
             
-            // Douzaine (D1, D2, D3)
-            const char* s_doz;
-            if (win <= 12) s_doz = "1ere 12";
-            else if (win <= 24) s_doz = "2eme 12";
-            else s_doz = "3eme 12";
+            const char* str_doz;
+            if (win <= 12) str_doz = "1ere 12";
+            else if (win <= 24) str_doz = "2eme 12";
+            else str_doz = "3eme 12";
 
-            // Colonne (C1, C2, C3)
-            const char* s_col;
-            if (win % 3 == 1) s_col = "COLONNE 1";
-            else if (win % 3 == 2) s_col = "COLONNE 2";
-            else s_col = "COLONNE 3";
+            const char* str_col;
+            if (win % 3 == 1) str_col = "COLONNE 1";
+            else if (win % 3 == 2) str_col = "COLONNE 2";
+            else str_col = "COLONNE 3";
 
-            // Affichage complet : Num - Coul - Parité - Moitié - Douz - Col
             printf("%d | %s | %s | %s | %s | %s\n", 
-                   win, s_color, s_parity, s_half, s_doz, s_col);
+                   win, str_color, str_parity, str_half, str_doz, str_col);
         }
         printf("\n");
 
@@ -224,7 +232,7 @@ int main(int argc, char *argv[]) {
         else if (win >= 13 && win <= 24) doz_res = 2;
         else if (win >= 25 && win <= 36) doz_res = 3;
 
-        // --- PHASE 4: PAIEMENT ---      
+        // Phase 4: Paiement des gains   
         for (int i = 0; i < shm->total_bets; i++) {
             Bet m = shm->bets[i];
             int won = 0;
@@ -234,6 +242,7 @@ int main(int argc, char *argv[]) {
                 for (int k = 0; k < m.count; k++) {
                     if (m.numbers[k] == win) { won = 1; break; }
                 }
+                // ratios des mises interieurs
                 switch(m.type) {
                     case BET_SINGLE: ratio = 35; break;
                     case BET_SPLIT: ratio = 17; break;
@@ -243,6 +252,7 @@ int main(int argc, char *argv[]) {
                     default: ratio = 1;
                 }
             } else {
+                // ratios des mises exterieurs
                 switch(m.type) {
                     case BET_RED: if (is_red_res) { won=1; ratio=1; } break;
                     case BET_BLACK: if (!is_red_res && win!=0 && win!=37) { won=1; ratio=1; } break;
@@ -260,6 +270,7 @@ int main(int argc, char *argv[]) {
             }
 
             if (won) {
+                // calcule et paiement
                 int profit = m.amount * ratio;
                 int total_return = profit + m.amount;
 
@@ -275,14 +286,14 @@ int main(int argc, char *argv[]) {
         else if(shm->total_gains < 0) printf("  -> la maison prends %d$.\n", -shm->total_gains);
 
 
-        // --- PHASE 5: AFFICHAGE ---
+        // Phases 5: Resultats et reset
         shm->state = RESULTS;
         sleep(RESULT_TIME-2); 
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
             shm->mutex_events[idx].ts = time(NULL);
             shm->mutex_events[idx].pid = getpid();
-            shm->mutex_events[idx].status = 0; // FREE
+            shm->mutex_events[idx].status = 0; 
             shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
             if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
         }
@@ -292,7 +303,7 @@ int main(int argc, char *argv[]) {
         sem_post(&shm->mutex);
         sleep(2); 
 
-        // --- RESET ---
+        // Nettoyage pour passage au tour suivant
         sem_wait(&shm->mutex);
         shm->mutex_status = 1;
         shm->mutex_owner = getpid();
@@ -300,18 +311,17 @@ int main(int argc, char *argv[]) {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
             shm->mutex_events[idx].ts = time(NULL);
             shm->mutex_events[idx].pid = shm->mutex_owner;
-            shm->mutex_events[idx].status = 1; // LOCK
+            shm->mutex_events[idx].status = 1;
             shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
             if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
         }
         shm->total_bets = 0;
         shm->total_gains = 0;
-        // record unlock event
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
             shm->mutex_events[idx].ts = time(NULL);
             shm->mutex_events[idx].pid = getpid();
-            shm->mutex_events[idx].status = 0; // FREE
+            shm->mutex_events[idx].status = 0; 
             shm->mutex_events_head = (idx + 1) % MUTEX_EVENT_HISTORY;
             if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
         }
