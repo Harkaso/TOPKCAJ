@@ -4,10 +4,10 @@
 #include <signal.h>
 
 volatile sig_atomic_t running = 1;
-int bet_price = BET_PRICE;
+
 
 // helper to append mutex events into SHM circular buffer (caller should hold shm->mutex)
-static void push_mutex_event(GameTable *shm, pid_t pid, int status) {
+static void push_mutex_event(SharedResource *shm, pid_t pid, int status) {
     if (!shm) return;
     int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
     shm->mutex_events[idx].ts = time(NULL);
@@ -17,12 +17,12 @@ static void push_mutex_event(GameTable *shm, pid_t pid, int status) {
     if (shm->mutex_events_count < MUTEX_EVENT_HISTORY) shm->mutex_events_count++;
 }
 
-void create_random_bet(Bet *m, int player_id) {
+void create_random_bet(Bet *m, int player_id, int bet_price) {
     m->pid = getpid();
     m->color_id = player_id;
     m->amount = bet_price;
     
-    int roll = rand() % 100;
+    int roll = rand() % 1000;
 
     // --- A. MISES EXTERIEURES (Rouge, Noir, etc.) ---
     if (roll < 65) {
@@ -91,118 +91,10 @@ void create_random_bet(Bet *m, int player_id) {
     }
 }
 
-int dbg_phase = 0; 
-int dbg_iter = 1;
-
-void create_debug_bet(Bet *m) {
-    m->pid = getpid();
-    m->color_id = 19;
-    m->amount = 0;
-
-    // Phase 0 : Mises Extérieures
-    if (dbg_phase == 0) {
-        printf("[DEBUG] Phase 0: Exterieures (%d/12)\n", dbg_iter + 1);
-        m->type = BET_RED + dbg_iter; m->count = 0;
-        dbg_iter++;
-        if (dbg_iter >= 12) { dbg_phase++; dbg_iter = 1; }
-        return;
-    }
-
-    // Phase 1 : Pleins 1-36
-    if (dbg_phase == 1) {
-        printf("[DEBUG] Phase 1: Pleins (%d)\n", dbg_iter);
-        m->type = BET_SINGLE; m->count = 1;
-        m->numbers[0] = dbg_iter;
-        dbg_iter++;
-        if (dbg_iter > 36) { dbg_phase++; dbg_iter = 0; }
-        return;
-    }
-
-    // Phase 2 : Zéros (0 et 00)
-    if (dbg_phase == 2) {
-        printf("[DEBUG] Phase 2: Zero (%s)\n", dbg_iter == 0 ? "0" : "00");
-        m->type = BET_SINGLE; m->count = 1;
-        m->numbers[0] = (dbg_iter == 0) ? 0 : 37;
-        dbg_iter++;
-        if (dbg_iter > 1) { dbg_phase++; dbg_iter = 1; }
-        return;
-    }
-
-    // Phase 3 : Splits Horizontaux
-    if (dbg_phase == 3) {
-        while (dbg_iter % 3 == 0 && dbg_iter < 36) dbg_iter++; 
-        if (dbg_iter >= 36) { 
-            dbg_phase++; dbg_iter = 1; create_debug_bet(m); return;
-        }
-        printf("[DEBUG] Phase 3: Split H (%d-%d)\n", dbg_iter, dbg_iter+1);
-        m->type = BET_SPLIT; m->count = 2;
-        m->numbers[0] = dbg_iter; m->numbers[1] = dbg_iter + 1;
-        dbg_iter++;
-        return;
-    }
-
-    // Phase 4 : Splits Verticaux
-    if (dbg_phase == 4) {
-        printf("[DEBUG] Phase 4: Split V (%d-%d)\n", dbg_iter, dbg_iter+3);
-        m->type = BET_SPLIT; m->count = 2;
-        m->numbers[0] = dbg_iter; m->numbers[1] = dbg_iter + 3;
-        dbg_iter++;
-        if (dbg_iter > 33) { dbg_phase++; dbg_iter = 0; }
-        return;
-    }
-
-    // Phase 5 : Split Spécial UNIQUE (0-00)
-    if (dbg_phase == 5) {
-        printf("[DEBUG] Phase 5: Split Special (0-00)\n");
-        m->type = BET_SPLIT; m->count = 2;
-        m->numbers[0] = 0; m->numbers[1] = 37;
-        dbg_phase++; dbg_iter = 1; 
-        return;
-    }
-
-    // Phase 6 : Streets
-    if (dbg_phase == 6) {
-        printf("[DEBUG] Phase 6: Street (Row %d)\n", dbg_iter);
-        m->type = BET_STREET; m->count = 3;
-        m->numbers[0] = dbg_iter; m->numbers[1] = dbg_iter + 1; m->numbers[2] = dbg_iter + 2;
-        dbg_iter += 3;
-        if (dbg_iter > 34) { dbg_phase++; dbg_iter = 1; }
-        return;
-    }
-
-    // Phase 7 : Carrés
-    if (dbg_phase == 7) {
-        while (dbg_iter % 3 == 0 && dbg_iter < 33) dbg_iter++;
-        if (dbg_iter >= 33) { 
-            dbg_phase++; dbg_iter = 1; create_debug_bet(m); return;
-        }
-        printf("[DEBUG] Phase 7: Carre (Base %d)\n", dbg_iter);
-        m->type = BET_SQUARE; m->count = 4;
-        m->numbers[0] = dbg_iter;     m->numbers[1] = dbg_iter + 1;
-        m->numbers[2] = dbg_iter + 3; m->numbers[3] = dbg_iter + 4;
-        dbg_iter++;
-        return;
-    }
-
-    // Phase 8 : Sixains
-    if (dbg_phase == 8) {
-        printf("[DEBUG] Phase 8: Sixain (Row %d)\n", dbg_iter);
-        m->type = BET_DOUBLE_STREET; m->count = 6;
-        for(int k=0; k<6; k++) m->numbers[k] = dbg_iter + k;
-        dbg_iter += 3;
-        if (dbg_iter > 31) { 
-            printf("--- RESET CYCLE DEBUG ---\n");
-            dbg_phase = 0; dbg_iter = 0; 
-        }
-        return;
-    }
-}
-
-
 // register the player in the shared table
 
 // helper: register slot
-int register_player(GameTable *shm_local, int pid_color) {
+int register_player(SharedResource *shm_local, int pid_color) {
     int idx = -1;
     sem_wait(&shm_local->mutex);
 
@@ -230,7 +122,7 @@ int register_player(GameTable *shm_local, int pid_color) {
     return idx;
 }
 
-void deregister_player(GameTable *shm_local, int slot) {
+void deregister_player(SharedResource *shm_local, int slot) {
     if (slot < 0) return;
     sem_wait(&shm_local->mutex);
     shm_local->mutex_status = 1; shm_local->mutex_owner = getpid();
@@ -250,13 +142,13 @@ void handle_sig(int sig) {
     running = 0;
 }
 
-void lancer_bot(int player_id, int is_debug) {
+void lancer_bot(int player_id, int bet_price) {
     srand(time(NULL) ^ (getpid()<<16));
     
     // Attachement SHM
-    int shmid = shmget(SHM_KEY, sizeof(GameTable), 0666);
+    int shmid = shmget(SHM_KEY, sizeof(SharedResource), 0666);
     if (shmid < 0) exit(1);
-    GameTable *shm = (GameTable *)shmat(shmid, NULL, 0);
+    SharedResource *shm = (SharedResource *)shmat(shmid, NULL, 0);
 
     // Signaux
     signal(SIGTERM, handle_sig);
@@ -278,9 +170,7 @@ void lancer_bot(int player_id, int is_debug) {
 
         // Logique de pari
         if (shm->state == BETS_OPEN && !bet_placed) {
-            // Pause "humaine" (sauf en debug)
-            if (!is_debug) usleep((rand() % 4000) * 1000);
-            else usleep(500000); // 0.5s en debug
+            usleep((rand() % 2300001) + 150000);
             
             // Section Critique : Placer le pari
             sem_wait(&shm->mutex);
@@ -291,10 +181,10 @@ void lancer_bot(int player_id, int is_debug) {
             if (shm->total_bets < MAX_BETS && shm->state == BETS_OPEN && shm->bank >= bet_price) 
             {
                 shm->bank -= bet_price;
+                shm->total_gains -= bet_price;
                 Bet m;
                 
-                if (is_debug) create_debug_bet(&m); // Mode test
-                else create_random_bet(&m, player_id); // Mode jeu
+                create_random_bet(&m, player_id, bet_price); // Mode jeu
                 
                 shm->bets[shm->total_bets] = m;
                 shm->total_bets++;
@@ -320,15 +210,14 @@ void lancer_bot(int player_id, int is_debug) {
 
 int main(int argc, char *argv[]) {
     int bots_to_launch = DEFAULT_BOTS;
-    int debug_mode = 0;
+    int bet_price = DEFAULT_BET_PRICE;
 
-    if (argc >= 2) {
-        if (strcmp(argv[1], "--debug") == 0) {
-            debug_mode = 1;
-            bots_to_launch = 1;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
+            bots_to_launch = atoi(argv[i+1]); i++;
         }
-        else if (strcmp(argv[1], "--bots") == 0 && argc >= 3) {
-            bots_to_launch = atoi(argv[2]);
+        else if (strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
+            bet_price = atoi(argv[i+1]); i++; // On récupère le prix
         }
     }
 
@@ -337,7 +226,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < bots_to_launch; i++) {
         if (fork() == 0) { 
             // On passe l'ID (i) pour la couleur
-            lancer_bot(i % 16, debug_mode); 
+            lancer_bot(i % 16, bet_price); 
             exit(0); 
         }
     }

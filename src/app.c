@@ -31,7 +31,7 @@ const int HEIGHT_CHANCES = 90;  // Hauteur visuelle de la case "Pair/Impair"
 
 // POSITION DE LA ROUE (Dans la zone verte à gauche)
 const int WHEEL_POS_X = 250;
-const int WHEEL_POS_Y = 440;
+const int WHEEL_POS_Y = 365;
 const float WHEEL_SCALE = 0.45f; // Taille globale de la roue
 
 const float BALL_SIZE = 5.5f;
@@ -48,15 +48,15 @@ Color bot_tints[] = {
     SKYBLUE,
     RED,
     DARKBLUE,
-    YELLOW,
-    MAROON,
-    PINK,
     VIOLET,
+    YELLOW,
+    MAGENTA,
     GOLD,
     BLUE,
     GREEN,
-    MAGENTA,
+    PINK,
     BEIGE,
+    MAROON,
     WHITE,
 };
 
@@ -254,7 +254,7 @@ void DrawAssets(float wheel_rotation, int win_num, int state) {
     }
 }
 
-void DrawChips(GameTable *shm) {
+void DrawChips(SharedResource *shm) {
     for (int i = 0; i < shm->total_bets; i++) {
         Vector2 pos = get_bet_pos(shm->bets[i]);
         
@@ -286,7 +286,7 @@ void DrawChips(GameTable *shm) {
 
 // 1. SHM pointer will be obtained when the game starts (server launched by GUI)
 int shmid = -1;
-GameTable *shm = NULL;
+SharedResource *shm = NULL;
 pid_t pid_server = 0;
 pid_t pid_bots = 0;
 
@@ -337,18 +337,25 @@ int main(int argc, char *argv[]) {
     signal(SIGHUP, gui_cleanup_int);
     atexit(gui_cleanup_atexit);
 
-    char str_bots[10] = "8"; // Défaut
-    int is_debug = 0;
+    char str_bots[10]; sprintf(str_bots, "%d", DEFAULT_BOTS);
+    char str_bank[10]; sprintf(str_bank, "%d", DEFAULT_BANK);
+    char str_price[10]; sprintf(str_price, "%d", DEFAULT_BET_PRICE);
+
+    int start_bank = DEFAULT_BANK;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--debug") == 0) {
-            is_debug = 1;
+            if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
+                strncpy(str_bots, argv[i+1], 9); i++;
+            }
+            else if (strcmp(argv[i], "--bank") == 0 && i+1 < argc) {
+                strncpy(str_bank, argv[i+1], 9); 
+                start_bank = atoi(argv[i+1]);
+                i++;
+            }
+            else if (strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
+                strncpy(str_price, argv[i+1], 9); i++;
+            }
         }
-        else if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
-            strncpy(str_bots, argv[i+1], 9);
-            i++;
-        }
-    }
 
     // 2. INIT FENETRE
     SetTraceLogLevel(LOG_NONE);
@@ -433,36 +440,32 @@ int main(int argc, char *argv[]) {
                 if (pid_server == 0) {
                     pid_server = fork();
                     if (pid_server == 0) {
-                        // child: create a new process group so we can kill the whole group later
                         setpgid(0,0);
                         // child: replace with server binary
-                        execl("./dependencies/server", "./dependencies/server", (char*)NULL);
-                        // if exec fails
-                        perror("execl server");
-                        _exit(127);
+                        execl("./dependencies/server", "./dependencies/server", 
+                              "--bank", str_bank, 
+                              "--bet-price", str_price, 
+                              NULL);
+                        _exit(0);
                     }
                 }
                 if (pid_bots == 0) {
                     pid_bots = fork();
                     if (pid_bots == 0) {
-                        // child: create a new process group so we can kill the whole group later
                         setpgid(0,0);
                             
-                        if (is_debug) {
-                            execl("./dependencies/players", "players", "--debug", NULL);
-                        } else {
-                            execl("./dependencies/players", "players", "--bots", str_bots, NULL);
-                        }
-                        
-                        perror("execl player");
-                        _exit(127);
+                        execl("./dependencies/players", "players", 
+                              "--bots", str_bots, 
+                              "--bet-price", str_price, 
+                              NULL);
+                        _exit(0);
                         }
                 }
 
                 // Wait for shared memory segment to be created by the server
                 int tries = 0;
                 while (tries < 30) { // wait up to ~30 seconds
-                    shmid = shmget(SHM_KEY, sizeof(GameTable), 0666);
+                    shmid = shmget(SHM_KEY, sizeof(SharedResource), 0666);
                     if (shmid != -1) break;
                     tries++;
                     sleep(1);
@@ -475,7 +478,7 @@ int main(int argc, char *argv[]) {
                     TraceLog(LOG_WARNING, "Server did not create shared memory — aborting start");
                 } else {
                     // Attach to shared memory and enter game
-                    shm = (GameTable*)shmat(shmid, NULL, 0);
+                    shm = (SharedResource*)shmat(shmid, NULL, 0);
                     if (shm == (void*)-1) {
                         shm = NULL;
                         TraceLog(LOG_WARNING, "Failed to attach shared memory in GUI");
@@ -490,16 +493,6 @@ int main(int argc, char *argv[]) {
 
             // B. Dessiner les Jetons
             DrawChips(shm);
-        }
-
-        // Debug key: press 'K' to force bank to 0 (show game over panel)
-        if (!in_menu && IsKeyPressed(KEY_K) && shm != NULL) {
-            if (sem_wait(&shm->mutex) == 0) {
-                shm->bank = 0;
-                shm->total_bets = 0;
-                sem_post(&shm->mutex);
-                TraceLog(LOG_INFO, "[GUI-DEBUG] bank set to 0 via KEY_K");
-            }
         }
 
         // Draw UI and status panel only when inside the game
@@ -536,9 +529,6 @@ int main(int argc, char *argv[]) {
                 DrawText(txtNum, boxX + (boxW/2) - (txtW/2), boxY + (boxH/2) - (txtSize/2), txtSize, WHITE);
             }
 
-            const char* textBank = TextFormat("BANQUE: %d $", shm->bank);
-            DrawText(textBank, 20, 20, 40, GOLD);
-
             // --- RIGHT STATUS PANEL (Dashboard Final) ---
             int panel_x = SCREEN_W - PANEL_W;
             time_t now = time(NULL);
@@ -565,14 +555,33 @@ int main(int argc, char *argv[]) {
             int y_state = 150;
             Color stateColor = GRAY;
             const char* stateText = "INCONNU";
-            
-            if (shm->state == BETS_OPEN) { stateColor = LIME; stateText = "OUVERT - PARIS EN COURS"; }
+            const char* extraText = ""; 
+            Color extraColor = WHITE;
+
+            if (shm->state == BETS_OPEN) { stateColor = LIME; stateText = "OUVERT - FAITES VOS JEUX"; }
             else if (shm->state == BETS_CLOSED) { stateColor = ORANGE; stateText = "FERME - RIEN NE VA PLUS"; }
-            else if (shm->state == RESULTS) { stateColor = RED; stateText = "RESULTATS & PAIEMENT"; }
+            else if (shm->state == RESULTS) { 
+                stateColor = RED; // La boite et le titre restent ROUGE
+                stateText = "RESULTATS & PAIEMENT"; 
+
+                int net = shm->total_gains;
+                if (net >= 0) {
+                    extraColor = GREEN; 
+                    extraText = TextFormat("(Gain: +%d$)", net);
+                } else {
+                    extraColor = LIGHTGRAY;
+                    extraText = TextFormat("(Perte: %d$)", net);
+                }
+            }
 
             DrawRectangle(panel_x + 10, y_state, PANEL_W - 20, 30, Fade(stateColor, 0.2f));
             DrawRectangleLines(panel_x + 10, y_state, PANEL_W - 20, 30, stateColor);
             DrawText(stateText, panel_x + 20, y_state + 8, 12, stateColor);
+
+            if (shm->state == RESULTS) {
+                int widthTitre = MeasureText(stateText, 12);
+                DrawText(extraText, panel_x + 20 + widthTitre + 15, y_state + 8, 12, extraColor);
+            }
 
             // 4. BLOC TECHNIQUE (MUTEX)
             int y_tech = 205;
@@ -675,26 +684,26 @@ int main(int argc, char *argv[]) {
                         betCol = SKYBLUE;
                         Bet m = shm->bets[b];
                         switch(m.type) {
-                            case BET_SINGLE: betStr = TextFormat("Plein %d", m.numbers[0]); if(m.numbers[0]==37) betStr="Plein 00"; break;
+                            case BET_SINGLE: betStr = TextFormat("PLEIN %d", m.numbers[0]); if(m.numbers[0]==37) betStr="Plein 00"; break;
                             case BET_SPLIT:  
-                                if(m.numbers[1]==37) betStr = "Cheval 0-00"; 
-                                else betStr = TextFormat("Cheval %d-%d", m.numbers[0], m.numbers[1]); 
+                                if(m.numbers[1]==37) betStr = "CHEVAL 0-00"; 
+                                else betStr = TextFormat("CHEVAL %d-%d", m.numbers[0], m.numbers[1]); 
                                 break;
-                            case BET_STREET: betStr = TextFormat("Traversale %d : %d", m.numbers[0], m.numbers[2]); break;
-                            case BET_SQUARE: betStr = TextFormat("Carre %d-%d-%d-%d", m.numbers[0], m.numbers[1], m.numbers[2], m.numbers[3]); break;
-                            case BET_DOUBLE_STREET: betStr = TextFormat("Sixain %d : %d", m.numbers[0], m.numbers[5]); break;
+                            case BET_STREET: betStr = TextFormat("TRANSVER. %d : %d", m.numbers[0], m.numbers[2]); break;
+                            case BET_SQUARE: betStr = TextFormat("CARRE %d-%d-%d-%d", m.numbers[0], m.numbers[1], m.numbers[2], m.numbers[3]); break;
+                            case BET_DOUBLE_STREET: betStr = TextFormat("SIXAIN %d : %d", m.numbers[0], m.numbers[5]); break;
                             case BET_RED:   betStr = "ROUGE"; betCol=RED; break;
                             case BET_BLACK: betStr = "NOIR"; betCol=GRAY; break;
                             case BET_EVEN:  betStr = "PAIR"; break;
                             case BET_ODD:   betStr = "IMPAIR"; break;
-                            case BET_LOW:   betStr = "1 a 18"; break;
-                            case BET_HIGH:  betStr = "19 a 36"; break;
+                            case BET_LOW:   betStr = "1 A 18"; break;
+                            case BET_HIGH:  betStr = "19 A 36"; break;
                             case BET_DOZEN_1: betStr = "1ere 12"; break;
                             case BET_DOZEN_2: betStr = "2eme 12"; break;
                             case BET_DOZEN_3: betStr = "3eme 12"; break;
-                            case BET_COL_1: betStr = "COL 1"; break;
-                            case BET_COL_2: betStr = "COL 2"; break;
-                            case BET_COL_3: betStr = "COL 3"; break;
+                            case BET_COL_1: betStr = "COL. 1"; break;
+                            case BET_COL_2: betStr = "COL. 2"; break;
+                            case BET_COL_3: betStr = "COL. 3"; break;
                             default: betStr = "?"; break;
                         }
                         break; 
@@ -743,7 +752,7 @@ int main(int argc, char *argv[]) {
             // --- SYSLOG ---
             DrawRectangle(panel_x + 10, log_y, PANEL_W - 20, log_h, (Color){0, 0, 0, 180});
             DrawRectangleLines(panel_x + 10, log_y, PANEL_W - 20, log_h, DARKGRAY);
-            DrawText("> SYSLOG (HISTORY)", panel_x + 15, log_y + 5, 10, GREEN);
+            DrawText("> SYSLOG (MUTEX HISTORY)", panel_x + 15, log_y + 5, 10, GREEN);
 
             int max_lines = (log_h - 20) / 14;
             int count = shm->mutex_events_count;
@@ -803,7 +812,7 @@ int main(int argc, char *argv[]) {
                     // Reset bank and bets under semaphore protection
                     if (shm != NULL) {
                         if (sem_wait(&shm->mutex) == 0) {
-                            shm->bank = START_BANK;
+                            shm->bank = start_bank;
                             shm->total_bets = 0;
                             sem_post(&shm->mutex);
                         }

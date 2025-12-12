@@ -17,8 +17,8 @@
 #define DEFAULT_BOTS 8
 #define MIN_BOTS 4
 #define MAX_BOTS 16
-#define START_BANK 2000
-#define BET_PRICE 20
+#define DEFAULT_BANK 2000
+#define DEFAULT_BET_PRICE 25
 #define MAX_BETS 50
 #define MUTEX_EVENT_HISTORY 32
 enum GameState { BETS_OPEN = 0, BETS_CLOSED = 1, RESULTS = 2 };
@@ -63,6 +63,7 @@ typedef struct {
     Bet bets[MAX_BETS];
     int total_bets;
     int bank;
+    int total_gains;
     PlayerInfo players[MAX_BOTS];
     int player_count;
     int mutex_status;    // 0 = unlocked, 1 = locked
@@ -71,6 +72,6 @@ typedef struct {
     MutexEvent mutex_events[MUTEX_EVENT_HISTORY];
     int mutex_events_head; // next write index
     int mutex_events_count;
-} GameTable;
+} SharedResource;
 
 #endif
