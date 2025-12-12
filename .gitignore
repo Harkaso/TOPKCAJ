@@ -3,6 +3,8 @@ launcher.exe
 a.out
 dependencies/*
 !dependencies/.gitkeep
+docs
+docs/*
 
 # Prerequisites
 *.d

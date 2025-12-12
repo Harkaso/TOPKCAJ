@@ -80,6 +80,12 @@ make clean
 make rebuild
 ```
 
+#### Compiler la documentation
+```bash
+make doc
+make doc-pdf
+```
+
 ---
 
 ## Utilisation
