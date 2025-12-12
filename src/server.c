@@ -1,14 +1,15 @@
 // server.c
 #include "shared.h"
 
-#define OPEN_TIME 7
-#define CLOSE_TIME 3
-#define RESULT_TIME 10
+#define OPEN_TIME 10
+#define CLOSE_TIME 2
+#define RESULT_TIME 13
 // Watchdog: if a process holds the mutex but its last_seen is older than this many seconds,
 // the server will try to clear the lock to avoid permanent deadlock.
 #define MUTEX_WATCHDOG_SECONDS 6
 int shmid;
 GameTable *shm;
+int start_bank = START_BANK;
 
 void cleanup(int sig) {
     printf("\n[Server] Nettoyage IPC et arrêt...\n");
@@ -28,7 +29,7 @@ int is_red(int n) {
 }
 
 int is_inside_bet(int type) {
-    return (type >= BET_SINGLE && type <= BET_TOP_LINE);
+    return (type >= BET_SINGLE && type <= BET_DOUBLE_STREET);
 }
 
 void print_bet_desc(Bet m) {
@@ -38,8 +39,6 @@ void print_bet_desc(Bet m) {
         case BET_STREET: printf("TRANSVERSALE sur %d-%d-%d", m.numbers[0], m.numbers[1], m.numbers[2]); break;
         case BET_SQUARE: printf("CARRE sur %d-%d-%d-%d", m.numbers[0], m.numbers[1], m.numbers[2], m.numbers[3]); break;
         case BET_DOUBLE_STREET: printf("SIXAIN de %d a %d", m.numbers[0], m.numbers[5]); break;
-        case BET_TRIO: printf("TRIO sur %d-%d-%d", m.numbers[0], m.numbers[1], m.numbers[2]); break;
-        case BET_TOP_LINE: printf("TOP LINE (0-00-1-2-3)"); break;
         case BET_RED: printf("ROUGE"); break;
         case BET_BLACK: printf("NOIR"); break;
         case BET_EVEN: printf("PAIR"); break;
@@ -74,7 +73,7 @@ int main() {
 
     shm->state = BETS_OPEN;
     shm->total_bets = 0;
-    shm->bank = START_BANK;
+    shm->bank = start_bank;
 
     // Initialize player registry
     for (int i = 0; i < MAX_BOTS; i++) {
@@ -90,7 +89,6 @@ int main() {
     shm->mutex_events_count = 0;
 
     printf("[Croupier] Casino Ouvert. Attente des joueurs...\n");
-    sleep(2);
 
     while (1) {
         // --- WATCHDOG: detect stale mutex owner and try to recover ---
@@ -141,6 +139,7 @@ int main() {
         printf("[Croupier] RIEN NE VA PLUS\n");
         sem_wait(&shm->mutex);
         shm->mutex_status = 1; shm->mutex_owner = getpid();
+        usleep(200000);
         // record lock event
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
@@ -189,6 +188,7 @@ int main() {
         // --- PHASE 4: PAIEMENT ---
         sem_wait(&shm->mutex);
         shm->mutex_status = 1; shm->mutex_owner = getpid();
+        usleep(200000);
         // record lock event
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
@@ -215,8 +215,6 @@ int main() {
                     case BET_STREET: ratio = 11; break;
                     case BET_SQUARE: ratio = 8; break;
                     case BET_DOUBLE_STREET: ratio = 5; break;
-                    case BET_TRIO: ratio=11; break;
-                    case BET_TOP_LINE: ratio=6; break;
                     default: ratio = 1;
                 }
             } else {
@@ -267,7 +265,9 @@ int main() {
 
         // --- RESET ---
         sem_wait(&shm->mutex);
-        shm->mutex_status = 1; shm->mutex_owner = getpid();
+        shm->mutex_status = 1; 
+        shm->mutex_owner = getpid();
+        usleep(200000);
         // record lock event
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;

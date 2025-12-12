@@ -1,7 +1,6 @@
 // launcher.c
 #include "shared.h"
 #include <sys/wait.h>
-#include <string.h>
 
 pid_t pid_server, pid_gui, pid_bots;
 
@@ -27,34 +26,44 @@ int main(int argc, char *argv[]) {
     printf("     ETOPKCAJ - ROULETTE AMERICAINE     \n");
     printf("========================================\n");
     
-    /*
-    int num_bots = -99;
-
-    if (argc >= 3 && strcmp(argv[1], "--bots") == 0) {
-        num_bots = atoi(argv[2]);
-        if (num_bots <= 0) {
-            perror("Erreur: Le nombre de joueurs doit etre une nombre strictement positif.");
-            exit(2);            
-        }
-        if (num_bots < 4 && num_bots > 20) {
-            perror("Erreur: Le nombre de joueurs doit etre compris entre 4 et 20.");
-            exit(2);
-        }
-    }
-    */
-
-    if ((pid_server = fork()) == 0) {
-        // Do not start server here. GUI will start server/players when user clicks "Play".
-        exit(0);
-    }
-    sleep(1); 
-    // Start only the GUI. The GUI will launch server and players when the user starts the game.
     if ((pid_gui = fork()) == 0) {
-        freopen("/dev/null", "w", stderr);
-        execl("./dependencies/app", "app", NULL);
-        perror("Erreur: lancement de l'interface graphique impossible."); exit(3);
+        //freopen("/dev/null", "w", stderr);
+
+        // --- GESTION DES ARGUMENTS ---
+        
+        // CAS 1 : Mode Debug (./launcher --debug)
+        if (argc >= 2 && strcmp(argv[1], "--debug") == 0) {
+            printf("[Launcher] Mode DEBUG activé.\n");
+            execl("./dependencies/app", "app", "--debug", NULL);
+        }
+        
+        // CAS 2 : Mode Bots (./launcher --bots 12)
+        else if (argc >= 3 && strcmp(argv[1], "--bots") == 0) {
+            if (atoi(argv[2]) <= 0) {
+                printf("ERREUR: L'argument dois etre un nombre strictement positif.");
+                exit(2);
+            }
+            else if (atoi(argv[2]) > MAX_BOTS || atoi(argv[2]) < MIN_BOTS) {
+                printf("ERREUR: Le nombre de joueurs dois etre compris entre 4 et 16.");
+                exit(2);
+            }
+            printf("[Launcher] Mode %s BOTS activé.\n", argv[2]);
+            // On passe "--bots" ET le nombre (argv[2]) à l'app graphique
+            execl("./dependencies/app", "app", "--bots", argv[2], NULL);
+        }
+        
+        // CAS 3 : Lancement Normal (./launcher)
+        else {
+            printf("[Launcher] Mode STANDARD activé.\n");
+            execl("./dependencies/app", "app", NULL);
+        }
+
+        // Si on arrive ici, c'est que execl a échoué (fichier introuvable ?)
+        perror("ERREUR CRITIQUE : Impossible de lancer ./dependencies/app");
+        exit(3);
     }
 
+    // Le launcher attend que l'interface graphique (GUI) se ferme
     int status;
     waitpid(pid_gui, &status, 0);
 
