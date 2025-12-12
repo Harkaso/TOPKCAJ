@@ -1,21 +1,13 @@
 // launcher.c
 #include "shared.h"
 #include <sys/wait.h>
-#include <string.h>
 
-pid_t pid_server, pid_gui, pid_bots;
+pid_t pid_gui;
 
 void kill_all(int sig) {
-    printf("\n[Launcher] Nettoyage de tout les modules.\n");
+    printf("[Launcher] Nettoyage de tout les modules...\n");
     
     if (pid_gui > 0) kill(pid_gui, SIGKILL);
-    if (pid_bots > 0) kill(pid_bots, SIGKILL);
-    
-    if (pid_server > 0) {
-        kill(pid_server, SIGINT);
-        waitpid(pid_server, NULL, 0);
-    }
-    
     exit(0);
 }
 
@@ -27,45 +19,34 @@ int main(int argc, char *argv[]) {
     printf("     ETOPKCAJ - ROULETTE AMERICAINE     \n");
     printf("========================================\n");
     
-    /*
-    int num_bots = -99;
-
-    if (argc >= 3 && strcmp(argv[1], "--bots") == 0) {
-        num_bots = atoi(argv[2]);
-        if (num_bots <= 0) {
-            perror("Erreur: Le nombre de joueurs doit etre une nombre strictement positif.");
-            exit(2);            
-        }
-        if (num_bots < 4 && num_bots > 20) {
-            perror("Erreur: Le nombre de joueurs doit etre compris entre 4 et 20.");
-            exit(2);
-        }
-    }
-    */
-
-    if ((pid_server = fork()) == 0) {
-        execl("./dependencies/server", "server", NULL);
-        perror("Erreur: lancement du serveur impossible."); exit(1);
-    }
-    sleep(1); 
-
-    if ((pid_bots = fork()) == 0) {
-        /*
-        if (num_bots > 1) {
-            execl("./dependencies/players", "players", "--bots", num_bots, NULL);
-        } 
-        else {
-            execl("./dependencies/players", "players", NULL);
-        }
-        */
-        execl("./dependencies/players", "players", NULL);
-        perror("Erreur: lancement des joueurs impossible."); exit(2);
-    }
-
     if ((pid_gui = fork()) == 0) {
         freopen("/dev/null", "w", stderr);
-        execl("./dependencies/app", "app", NULL);
-        perror("Erreur: lancement lancement de l'interface graphique impossible."); exit(3);
+
+        char str_bots[10]; sprintf(str_bots, "%d", DEFAULT_BOTS);
+        char str_bank[10]; sprintf(str_bank, "%d", DEFAULT_BANK);
+        char str_price[10]; sprintf(str_price, "%d", DEFAULT_BET_PRICE);
+
+        // --- GESTION DES ARGUMENTS ---
+        
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
+                strncpy(str_bots, argv[i+1], 9); i++;
+            }
+            else if (strcmp(argv[i], "--bank") == 0 && i+1 < argc) {
+                strncpy(str_bank, argv[i+1], 9); i++; // On remplace le défaut par l'argument
+            }
+            else if (strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
+                strncpy(str_price, argv[i+1], 9); i++;
+            }
+        }
+        
+        printf("[Launcher] Config: %s Bots | Bank: %s$ | Bet: %s$\n", str_bots, str_bank, str_price);
+
+        execl("./dependencies/app", "app", 
+              "--bots", str_bots, 
+              "--bank", str_bank, 
+              "--bet-price", str_price, 
+              NULL);
     }
 
     int status;
