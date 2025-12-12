@@ -42,7 +42,7 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, kill_all);
 
     printf("========================================\n");
-    printf("     ETOPKCAJ - ROULETTE AMERICAINE     \n");
+    printf("     TOPCKAJ - ROULETTE AMERICAINE     \n");
     printf("========================================\n");
     
     if ((pid_gui = fork()) == 0) {
