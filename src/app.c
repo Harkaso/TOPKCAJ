@@ -342,8 +342,8 @@ void DrawChips(SharedResource *shm) {
     }
 }
 
-// Variables globales de gestion de processusint 
-shmid = -1;
+// Variables globales de gestion de processus
+int shmid = -1;
 SharedResource *shm = NULL;
 pid_t pid_server = 0;
 pid_t pid_bots = 0;
@@ -438,7 +438,7 @@ int main(int argc, char *argv[]) {
 
     // Initialisation de la fenêtre
     SetTraceLogLevel(LOG_NONE);
-    InitWindow(SCREEN_W, SCREEN_H, "ETOPKCEJ - Roulette Americaine");
+    InitWindow(SCREEN_W, SCREEN_H, "TOPKCAJ - Roulette Americaine");
     SetTargetFPS(60);
 
     // Chargement des textures
@@ -597,7 +597,7 @@ int main(int argc, char *argv[]) {
             DrawRectangle(panel_x, 0, PANEL_W, SCREEN_H, (Color){15, 15, 20, 245});
             DrawLine(panel_x, 0, panel_x, SCREEN_H, (Color){255, 215, 0, 100});
             
-            DrawText("ETOPKCAJ", panel_x + 20, 15, 24, GOLD);
+            DrawText("TOPCKAJ", panel_x + 20, 15, 24, GOLD);
             DrawRectangle(panel_x + 20, 45, PANEL_W - 40, 2, (Color){255, 215, 0, 50});
 
             int y_stats = 60;
