@@ -277,6 +277,7 @@ int main(int argc, char *argv[]) {
 
         // --- PHASE 5: AFFICHAGE ---
         shm->state = RESULTS;
+        sleep(RESULT_TIME-2); 
         {
             int idx = shm->mutex_events_head % MUTEX_EVENT_HISTORY;
             shm->mutex_events[idx].ts = time(NULL);
@@ -289,7 +290,7 @@ int main(int argc, char *argv[]) {
         shm->mutex_status = 0; 
         shm->mutex_owner = 0;
         sem_post(&shm->mutex);
-        sleep(RESULT_TIME); 
+        sleep(2); 
 
         // --- RESET ---
         sem_wait(&shm->mutex);

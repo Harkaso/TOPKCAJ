@@ -2,19 +2,12 @@
 #include "shared.h"
 #include <sys/wait.h>
 
-pid_t pid_server, pid_gui, pid_bots;
+pid_t pid_gui;
 
 void kill_all(int sig) {
     printf("[Launcher] Nettoyage de tout les modules...\n");
     
     if (pid_gui > 0) kill(pid_gui, SIGKILL);
-    if (pid_bots > 0) kill(pid_bots, SIGKILL);
-    
-    if (pid_server > 0) {
-        kill(pid_server, SIGINT);
-        waitpid(pid_server, NULL, 0);
-    }
-    
     exit(0);
 }
 
@@ -56,7 +49,6 @@ int main(int argc, char *argv[]) {
               NULL);
     }
 
-    // Le launcher attend que l'interface graphique (GUI) se ferme
     int status;
     waitpid(pid_gui, &status, 0);
 

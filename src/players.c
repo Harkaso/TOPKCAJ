@@ -163,11 +163,12 @@ void lancer_bot(int player_id, int bet_price) {
     // Enregistrement
     int reg_slot = register_player(shm, player_id);
     int bet_placed = 0;
+    time_t last_heartbeat = 0;
 
     // Boucle principale
     while (running) {
         // Heartbeat (battement de coeur pour le GUI)
-        if (reg_slot >= 0) {
+        if (reg_slot >= 0 && difftime(time(NULL), last_heartbeat) >= 1.0) {
             sem_wait(&shm->mutex);
             // On évite les logs trop fréquents pour le heartbeat sinon ça flood l'historique
             shm->players[reg_slot].last_seen = time(NULL);
@@ -195,6 +196,7 @@ void lancer_bot(int player_id, int bet_price) {
                 shm->bets[shm->total_bets] = m;
                 shm->total_bets++;
                 bet_placed = 1;
+                if (reg_slot >= 0) shm->players[reg_slot].last_seen = time(NULL);
             }
 
             shm->mutex_status = 0; shm->mutex_owner = 0;
