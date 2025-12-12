@@ -595,8 +595,8 @@ int main(int argc, char *argv[]) {
             // En-têtes : ID | PID | PARI | C. | PING
             DrawText("ID",   panel_x + 15, col_py, 10, DARKGRAY);
             DrawText("PID",  panel_x + 40, col_py, 10, DARKGRAY);
-            DrawText("PARI", panel_x + 90, col_py, 10, DARKGRAY);
-            DrawText("COUL.",   panel_x + 215, col_py, 10, DARKGRAY);
+            DrawText("PARI", panel_x + 92, col_py, 10, DARKGRAY);
+            DrawText("COUL.",   panel_x + 210, col_py, 10, DARKGRAY);
             DrawText("PING", panel_x + 250, col_py, 10, DARKGRAY);
             
             int row_y = col_py + 15;
@@ -621,8 +621,45 @@ int main(int argc, char *argv[]) {
 
                 int ago = (last_action_ts > 0) ? (int)(now - last_action_ts) : -1;
 
-                // Couleur de la ligne (Grise si pas d'action depuis 10s)
-                Color rowCol = (ago > 10 || ago == -1) ? DARKGRAY : WHITE; 
+                Color rowCol = WHITE; 
+                
+                // Si on est en phase de RESULTATS, on calcule si le joueur a gagné
+                if (shm->state == RESULTS) {
+                    int win = shm->winning_number;
+                    int won = 0;
+                    
+                    // On cherche le pari du joueur
+                    for(int b=0; b < shm->total_bets; b++) {
+                        if (shm->bets[b].pid == pid) {
+                            Bet m = shm->bets[b];
+                            // Vérification rapide de victoire
+                            if (m.type <= BET_DOUBLE_STREET) { // Mises Intérieures
+                                for(int k=0; k<m.count; k++) if(m.numbers[k] == win) won=1;
+                            } else { // Mises Extérieures
+                                int is_red = is_red_num(win);
+                                int is_zero = (win == 0 || win == 37);
+                                switch(m.type) {
+                                    case BET_RED: if(is_red) won=1; break;
+                                    case BET_BLACK: if(!is_red && !is_zero) won=1; break;
+                                    case BET_EVEN: if(win%2==0 && !is_zero) won=1; break;
+                                    case BET_ODD: if(win%2!=0 && !is_zero) won=1; break;
+                                    case BET_LOW: if(win>=1 && win<=18) won=1; break;
+                                    case BET_HIGH: if(win>=19 && win<=36) won=1; break;
+                                    case BET_COL_1: if(win!=0 && win!=37 && win%3==1) won=1; break;
+                                    case BET_COL_2: if(win!=0 && win!=37 && win%3==2) won=1; break;
+                                    case BET_COL_3: if(win!=0 && win!=37 && win%3==0) won=1; break;
+                                    case BET_DOZEN_1: if(win>=1 && win<=12) won=1; break;
+                                    case BET_DOZEN_2: if(win>=13 && win<=24) won=1; break;
+                                    case BET_DOZEN_3: if(win>=25 && win<=36) won=1; break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    
+                    if (won) rowCol = GREEN;        // GAGNANT EN VERT
+                    else rowCol = Fade(GRAY, 0.4f); // PERDANT EN GRIS SOMBRE
+                }
                 
                 // 1. ID
                 DrawText(TextFormat("%d", i+1), panel_x + 15, row_y, 12, rowCol);
@@ -663,11 +700,11 @@ int main(int argc, char *argv[]) {
                         break; 
                     }
                 }
-                DrawText(betStr, panel_x + 90, row_y, 10, betCol);
+                DrawText(betStr, panel_x + 92, row_y, 10, betCol);
 
                 // 4. COULEUR
-                DrawCircle(panel_x + 225, row_y + 6, 5, bot_tints[shm->players[i].color_id]);
-                DrawCircleLines(panel_x + 225, row_y + 6, 6, WHITE); 
+                DrawCircle(panel_x + 220, row_y + 6, 5, bot_tints[shm->players[i].color_id]);
+                DrawCircleLines(panel_x + 220, row_y + 6, 6, WHITE); 
 
                 // 5. PING (Basé sur le Mutex cette fois)
                 if (ago != -1) {
@@ -726,7 +763,7 @@ int main(int argc, char *argv[]) {
                 strftime(timeBuffer, 9, "%H:%M:%S", tm_info);
                 
                 int status = shm->mutex_events[idx].status;
-                Color logCol = status ? YELLOW : GRAY;
+                Color logCol = status ? RED : DARKGREEN;
                 const char* act = status ? "LOCK" : "FREE";
                 
                 int line_y = log_y + log_h - 18 - (i * 14);
