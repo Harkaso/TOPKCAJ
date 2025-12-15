@@ -57,11 +57,11 @@ int main(int argc, char *argv[]) {
             if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
                 strncpy(str_bots, argv[i+1], 9); 
                 if (atoi(str_bots) <= 0) {
-                    printf("Erreur: l'option '--bots' dois recevoir un nombre strictement positif");
+                    printf("Erreur: l'option '--bots' dois recevoir un nombre strictement positif\n");
                     exit(1);
                 }
                 else if (atoi(str_bots) < 4 || atoi(str_bots) > 16) {
-                    printf("Erruer: L'option '--bots' dois etre comprise entre 4 et 16");
+                    printf("Erruer: L'option '--bots' dois etre comprise entre 4 et 16\n");
                     exit(1);
                 }
                 i++;
@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
             else if (strcmp(argv[i], "--bank") == 0 && i+1 < argc) {
                 strncpy(str_bank, argv[i+1], 9); 
                 if (atoi(str_bank) <= 0) {
-                    printf("Erreur: l'option '--bank' dois recevoir un nombre strictement positif");
+                    printf("Erreur: l'option '--bank' dois recevoir un nombre strictement positif\n");
                     exit(1);
                 }
                 i++;
@@ -77,7 +77,7 @@ int main(int argc, char *argv[]) {
             else if (strcmp(argv[i], "--price") == 0 && i+1 < argc) {
                 strncpy(str_price, argv[i+1], 9); 
                 if (atoi(str_price) <= 0) {
-                    printf("Erreur: l'option '--price' dois recevoir un nombre strictement positif");
+                    printf("Erreur: l'option '--price' dois recevoir un nombre strictement positif\n");
                     exit(1);
                 }
                 i++;
