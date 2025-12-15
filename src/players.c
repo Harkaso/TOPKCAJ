@@ -148,6 +148,15 @@ void launch_bot(int player_id, int bet_price) {
     signal(SIGTERM, handle_sig);
     signal(SIGINT, handle_sig);
 
+    sem_wait(&shm->mutex);
+    shm->mutex_status = 1; shm->mutex_owner = getpid();
+    usleep(200000);
+    push_mutex_event(shm, shm->mutex_owner, 1);
+    shm->player_count++;
+    shm->mutex_status = 0; shm->mutex_owner = 0;
+    push_mutex_event(shm, getpid(), 0);
+    sem_post(&shm->mutex);
+
     int bet_placed = 0;
 
     // Boucle principale

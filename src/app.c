@@ -337,7 +337,7 @@ void DrawChips(SharedResource *shm) {
                 (Vector2){(tChip.width*scale)/2, (tChip.height*scale)/2}, 
                 0.0f, tint);
                 
-            DrawText(TextFormat("%d", shm->bets[i].color_id+1), pos.x-4, pos.y-6, 10, BLACK);
+            //DrawText(TextFormat("%d", shm->bets[i].color_id), pos.x-4, pos.y-6, 10, BLACK);
         }
     }
 }
@@ -659,7 +659,7 @@ int main(int argc, char *argv[]) {
             DrawRectangle(panel_x + 20, y_list + 18, PANEL_W - 40, 1, GRAY);
             
             int col_py = y_list + 25;
-            DrawText("ID",   panel_x + 15, col_py, 10, DARKGRAY);
+            DrawText("#",   panel_x + 15, col_py, 10, DARKGRAY);
             DrawText("PID",  panel_x + 40, col_py, 10, DARKGRAY);
             DrawText("PARI", panel_x + 92, col_py, 10, DARKGRAY);
             DrawText("COUL.",   panel_x + 210, col_py, 10, DARKGRAY);
