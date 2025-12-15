@@ -121,7 +121,7 @@ void print_bet_desc(Bet m) {
  * 
  * Accepte les arguments en ligne de commande :
  * - `--bank <int>` : Montant initial de la banque commune de joueurs.
- * - `--bet-price <int>` : Prix d'une mise.
+ * - `--price <int>` : Prix d'une mise.
  */
 int main(int argc, char *argv[]) {
     // Gestion des signaux
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
         if(strcmp(argv[i], "--bank") == 0 && i+1 < argc) {
             start_bank = atoi(argv[i+1]); i++;
         }
-        else if(strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
+        else if(strcmp(argv[i], "--price") == 0 && i+1 < argc) {
             bet_price = atoi(argv[i+1]); i++;
         }
     }

@@ -218,7 +218,7 @@ int main(int argc, char *argv[]) {
         if (strcmp(argv[i], "--bots") == 0 && i+1 < argc) {
             bots_to_launch = atoi(argv[i+1]); i++;
         }
-        else if (strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
+        else if (strcmp(argv[i], "--price") == 0 && i+1 < argc) {
             bet_price = atoi(argv[i+1]); i++;
         }
     }

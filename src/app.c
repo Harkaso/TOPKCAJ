@@ -431,7 +431,7 @@ int main(int argc, char *argv[]) {
                 start_bank = atoi(argv[i+1]);
                 i++;
             }
-            else if (strcmp(argv[i], "--bet-price") == 0 && i+1 < argc) {
+            else if (strcmp(argv[i], "--price") == 0 && i+1 < argc) {
                 strncpy(str_price, argv[i+1], 9); i++;
             }
         }
@@ -515,7 +515,7 @@ int main(int argc, char *argv[]) {
                         setpgid(0,0);
                         execl("./dependencies/server", "./dependencies/server", 
                               "--bank", str_bank, 
-                              "--bet-price", str_price, 
+                              "--price", str_price, 
                               NULL);
                         _exit(0);
                     }
@@ -529,7 +529,7 @@ int main(int argc, char *argv[]) {
                             
                         execl("./dependencies/players", "players", 
                               "--bots", str_bots, 
-                              "--bet-price", str_price, 
+                              "--price", str_price, 
                               NULL);
                         _exit(0);
                         }
